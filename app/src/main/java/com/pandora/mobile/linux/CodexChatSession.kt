@@ -50,6 +50,7 @@ sealed interface CodexChatState {
 class CodexChatSession(
     context: Context,
     private val resumeThreadId: String? = null,
+    private val cwd: String = "/root",
 ) {
     private val appContext = context.applicationContext
     private val installer = RootfsInstaller(appContext)
@@ -207,7 +208,7 @@ class CodexChatSession(
             1 -> {
                 sendNotification("initialized", JSONObject())
                 val params = JSONObject()
-                    .put("cwd", "/root")
+                    .put("cwd", cwd)
                     .put("sandbox", "danger-full-access")
                     .put("approvalPolicy", "never")
                 if (resumeThreadId == null) {

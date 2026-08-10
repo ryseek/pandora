@@ -48,14 +48,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.MicNone
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.CircularProgressIndicator
@@ -105,6 +108,8 @@ import com.pandora.mobile.linux.CodexThreadCatalog
 import com.pandora.mobile.linux.CodexThreadSummary
 import com.pandora.mobile.linux.CodexUsageReader
 import com.pandora.mobile.linux.PtyTerminalSession
+import com.pandora.mobile.linux.PandoraProject
+import com.pandora.mobile.linux.ProjectCatalog
 import com.pandora.mobile.linux.ZmxSessionCatalog
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -156,12 +161,12 @@ private fun PandoraApp() {
                     Screen.Home -> HomeScreen(
                         sessions = sessions,
                         revision = sessionRevision,
-                        onNewChat = {
-                            chatManager.create()
+                        onNewChat = { cwd ->
+                            chatManager.create(cwd = cwd ?: "/root")
                             screen = Screen.Chat
                         },
-                        onOpenChat = { threadId ->
-                            chatManager.create(threadId)
+                        onOpenChat = { threadId, cwd ->
+                            chatManager.create(threadId, cwd)
                             screen = Screen.Chat
                         },
                         onNewTerminal = {
@@ -247,8 +252,8 @@ private fun PandoraApp() {
 private fun HomeScreen(
     sessions: List<ManagedTerminalSession>,
     @Suppress("UNUSED_PARAMETER") revision: Long,
-    onNewChat: () -> Unit,
-    onOpenChat: (String) -> Unit,
+    onNewChat: (String?) -> Unit,
+    onOpenChat: (String, String) -> Unit,
     onNewTerminal: () -> Unit,
     onOpenTerminal: (ManagedTerminalSession) -> Unit,
     onRestartTerminal: (ManagedTerminalSession) -> Unit,
@@ -261,15 +266,22 @@ private fun HomeScreen(
 ) {
     val context = LocalContext.current.applicationContext
     val chatCatalog = remember(context) { CodexThreadCatalog(context) }
+    val projectCatalog = remember(context) { ProjectCatalog(context) }
     var limitState by remember { mutableStateOf<CodexLimitsState>(CodexLimitsState.Loading) }
     var limitRefresh by remember { mutableStateOf(0) }
     var chats by remember(chatCatalog) { mutableStateOf(chatCatalog.readCached()) }
+    var registeredProjects by remember(projectCatalog) { mutableStateOf(projectCatalog.readRegistered()) }
     var persistentTerminals by remember { mutableStateOf<List<String>>(emptyList()) }
     var catalogLoading by remember { mutableStateOf(chats.isEmpty()) }
     var renameEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
     var deleteEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var renameProject by remember { mutableStateOf<PandoraProject?>(null) }
+    var deleteProject by remember { mutableStateOf<PandoraProject?>(null) }
     var actionInFlight by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    var addProjectStep by remember { mutableStateOf<AddProjectStep?>(null) }
+    var showNewChatDialog by remember { mutableStateOf(false) }
+    var expandedProjects by remember { mutableStateOf<Set<String>>(emptySet()) }
     val actionScope = rememberCoroutineScope()
     LaunchedEffect(limitRefresh, sessions.size) {
         limitState = CodexLimitsState.Loading
@@ -285,6 +297,7 @@ private fun HomeScreen(
         limitState = loaded.first
         loaded.second?.let { chats = it }
         loaded.third?.let { persistentTerminals = it }
+        registeredProjects = withContext(Dispatchers.IO) { projectCatalog.readRegistered() }
         catalogLoading = false
     }
 
@@ -297,6 +310,32 @@ private fun HomeScreen(
                 add(WorkspaceEntry.PersistentTerminal(it))
             }
         }.sortedByDescending { it.updatedAtMillis }
+    }
+    val projects = remember(chats, registeredProjects) {
+        val registeredByPath = registeredProjects.associateBy { it.path }
+        (registeredProjects.map { it.path } + chats.map { it.cwd }.filter { it != "/root" })
+            .distinct()
+            .filter { it.startsWith("/root/") }
+            .map { registeredByPath[it] ?: PandoraProject(it) }
+            .sortedWith(
+                compareByDescending<PandoraProject> { it.pinned }
+                    .thenByDescending { project ->
+                        chats.filter { it.cwd == project.path }.maxOfOrNull { it.updatedAtMillis } ?: 0L
+                    }
+                    .thenBy { it.name.lowercase() },
+            )
+    }
+    val projectPaths = remember(projects) { projects.map { it.path } }
+    LaunchedEffect(projectPaths) {
+        expandedProjects = expandedProjects + projectPaths
+    }
+    val projectChats = remember(chats, projectPaths) {
+        projectPaths.associateWith { path ->
+            chats.filter { it.cwd == path }.map(WorkspaceEntry::Chat)
+        }
+    }
+    val otherEntries = remember(entries, projectPaths) {
+        entries.filterNot { entry -> entry is WorkspaceEntry.Chat && entry.chat.cwd in projectPaths }
     }
 
     Column(
@@ -331,34 +370,84 @@ private fun HomeScreen(
         }
 
         Spacer(Modifier.height(18.dp))
-        if (entries.isEmpty()) {
-            Column(
-                Modifier.weight(1f).fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Box(
-                    Modifier.size(56.dp).background(AccentSurface, RoundedCornerShape(16.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = Accent, modifier = Modifier.size(25.dp))
-                }
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    if (catalogLoading) "Loading your workspace…" else "Your workspace is ready",
-                    color = Ink,
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.Medium,
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            item("projects-heading") {
+                WorkspaceSectionHeading(
+                    label = "PROJECTS",
+                    actionContentDescription = "Add project",
+                    onAction = { addProjectStep = AddProjectStep.Menu },
                 )
-                Spacer(Modifier.height(6.dp))
-                Text("Chats and terminals will appear here.", color = Muted, fontSize = 13.sp)
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                items(entries, key = { it.key }) { entry ->
+            if (projects.isEmpty()) {
+                item("projects-empty") {
+                    EmptyProjectsRow(
+                        loading = catalogLoading,
+                        onAddProject = { addProjectStep = AddProjectStep.Menu },
+                    )
+                }
+            }
+            projects.forEach { project ->
+                val path = project.path
+                val projectEntries = projectChats[path].orEmpty()
+                val expanded = path in expandedProjects
+                item("project:$path") {
+                    ProjectHeader(
+                        project = project,
+                        chatCount = projectEntries.size,
+                        expanded = expanded,
+                        onToggle = {
+                            expandedProjects = if (expanded) expandedProjects - path else expandedProjects + path
+                        },
+                        onRename = { renameProject = project; actionError = null },
+                        onPin = {
+                            actionScope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching { projectCatalog.setPinned(path, !project.pinned) }
+                                }
+                                result.onSuccess { updated ->
+                                    registeredProjects = (registeredProjects.filterNot { it.path == path } + updated)
+                                }.onFailure { actionError = it.message ?: "Could not update this project" }
+                            }
+                        },
+                        onDelete = { deleteProject = project; actionError = null },
+                    )
+                }
+                if (expanded && projectEntries.isEmpty()) {
+                    item("project-empty:$path") {
+                        EmptyProjectChatRow(onClick = { onNewChat(path) })
+                    }
+                }
+                if (expanded) {
+                    items(projectEntries, key = { it.key }) { entry ->
+                        WorkspaceEntryRow(
+                            entry = entry,
+                            nested = true,
+                            onOpenChat = onOpenChat,
+                            onOpenTerminal = onOpenTerminal,
+                            onRestartTerminal = onRestartTerminal,
+                            onOpenPersistentTerminal = onOpenPersistentTerminal,
+                            onRename = {
+                                actionError = null
+                                renameEntry = entry
+                            },
+                            onDelete = {
+                                actionError = null
+                                deleteEntry = entry
+                            },
+                        )
+                    }
+                }
+                item("project-line:$path") {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 7.dp).height(1.dp).background(Line))
+                }
+            }
+
+            if (otherEntries.isNotEmpty()) {
+                item("other-heading") { WorkspaceSectionHeading(label = "CHATS") }
+                items(otherEntries, key = { it.key }) { entry ->
                     WorkspaceEntryRow(
                         entry = entry,
                         onOpenChat = onOpenChat,
@@ -390,7 +479,7 @@ private fun HomeScreen(
             Row(
                 modifier = Modifier
                     .background(Ink, RoundedCornerShape(24.dp))
-                    .clickable(onClick = onNewChat)
+                    .clickable { showNewChatDialog = true }
                     .padding(horizontal = 20.dp, vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -404,6 +493,102 @@ private fun HomeScreen(
                 Text("New chat", color = Paper, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
         }
+    }
+
+    if (showNewChatDialog) {
+        NewChatProjectDialog(
+            projects = projects,
+            onDismiss = { showNewChatDialog = false },
+            onStartChat = { path ->
+                showNewChatDialog = false
+                onNewChat(path)
+            },
+            onChooseFolder = {
+                showNewChatDialog = false
+                addProjectStep = AddProjectStep.ChooseFolder
+            },
+        )
+    }
+
+    addProjectStep?.let { initialStep ->
+        AddProjectDialog(
+            catalog = projectCatalog,
+            initialStep = initialStep,
+            registeredPaths = projectPaths.toSet(),
+            onDismiss = { addProjectStep = null },
+            onProjectReady = { project ->
+                registeredProjects = (registeredProjects + project).distinctBy { it.path }
+                addProjectStep = null
+                onNewChat(project.path)
+            },
+        )
+    }
+
+    renameProject?.let { project ->
+        RenameProjectDialog(
+            project = project,
+            loading = actionInFlight,
+            error = actionError,
+            onDismiss = {
+                if (!actionInFlight) {
+                    renameProject = null
+                    actionError = null
+                }
+            },
+            onRename = { proposedName ->
+                actionScope.launch {
+                    actionInFlight = true
+                    actionError = null
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching { projectCatalog.rename(project.path, proposedName) }
+                    }
+                    actionInFlight = false
+                    result.onSuccess { updated ->
+                        registeredProjects = registeredProjects.filterNot { it.path == project.path } + updated
+                        renameProject = null
+                    }.onFailure {
+                        actionError = it.message ?: "Could not rename this project"
+                    }
+                }
+            },
+        )
+    }
+
+    deleteProject?.let { project ->
+        DeleteProjectDialog(
+            project = project,
+            chatCount = chats.count { it.cwd == project.path },
+            loading = actionInFlight,
+            error = actionError,
+            onDismiss = {
+                if (!actionInFlight) {
+                    deleteProject = null
+                    actionError = null
+                }
+            },
+            onDelete = {
+                actionScope.launch {
+                    actionInFlight = true
+                    actionError = null
+                    val projectChatIds = chats.filter { it.cwd == project.path }.map { it.id }
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            projectChatIds.forEach(chatCatalog::delete)
+                            projectCatalog.remove(project.path)
+                        }
+                    }
+                    actionInFlight = false
+                    result.onSuccess {
+                        chats = chats.filterNot { it.id in projectChatIds }
+                        registeredProjects = registeredProjects.filterNot { it.path == project.path }
+                        expandedProjects = expandedProjects - project.path
+                        deleteProject = null
+                    }.onFailure {
+                        actionError = it.message ?: "Could not delete this project"
+                    }
+                }
+            },
+        )
     }
 
     renameEntry?.let { entry ->
@@ -489,6 +674,488 @@ private fun HomeScreen(
             },
         )
     }
+}
+
+private enum class AddProjectStep { Menu, ChooseFolder, CreateFolder, CloneRepository }
+
+@Composable
+private fun WorkspaceSectionHeading(
+    label: String,
+    actionContentDescription: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.weight(1f))
+        if (onAction != null) {
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .background(SoftSurface, CircleShape)
+                    .clickable(onClick = onAction),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Add,
+                    contentDescription = actionContentDescription,
+                    tint = Ink,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ProjectHeader(
+    project: PandoraProject,
+    chatCount: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onRename: () -> Unit,
+    onPin: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onToggle,
+                    onLongClick = { menuExpanded = true },
+                    onLongClickLabel = "Project actions",
+                )
+                .padding(vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(42.dp).background(MaterialTheme.colorScheme.secondaryContainer, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Folder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        project.name,
+                        color = Ink,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (project.pinned) {
+                        Icon(
+                            Icons.Rounded.PushPin,
+                            contentDescription = "Pinned",
+                            tint = Accent,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        "$chatCount ${if (chatCount == 1) "chat" else "chats"}",
+                        color = Muted,
+                        fontSize = 11.sp,
+                    )
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    project.displayPath,
+                    color = Muted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                if (expanded) Icons.Rounded.KeyboardArrowDown else Icons.AutoMirrored.Rounded.ArrowForward,
+                contentDescription = if (expanded) "Collapse ${project.name}" else "Expand ${project.name}",
+                tint = Muted,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Box(Modifier.align(Alignment.CenterEnd).size(1.dp)) {
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                modifier = Modifier.width(184.dp),
+                offset = DpOffset((-8).dp, (-30).dp),
+                shape = RoundedCornerShape(16.dp),
+                containerColor = SoftSurface,
+                tonalElevation = 0.dp,
+                shadowElevation = 6.dp,
+            ) {
+                ProjectMenuItem(Icons.Rounded.Edit, "Rename") {
+                    menuExpanded = false
+                    onRename()
+                }
+                ProjectMenuItem(Icons.Rounded.PushPin, if (project.pinned) "Unpin" else "Pin") {
+                    menuExpanded = false
+                    onPin()
+                }
+                ProjectMenuItem(Icons.Rounded.Delete, "Delete", destructive = true) {
+                    menuExpanded = false
+                    onDelete()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProjectMenuItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val tint = if (destructive) MaterialTheme.colorScheme.error else Ink
+    DropdownMenuItem(
+        text = { Text(label, color = tint, fontSize = 14.sp, fontWeight = FontWeight.Medium) },
+        leadingIcon = {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+        },
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 14.dp),
+    )
+}
+
+@Composable
+private fun EmptyProjectsRow(loading: Boolean, onAddProject: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(SoftSurface, RoundedCornerShape(14.dp))
+            .clickable(enabled = !loading, onClick = onAddProject)
+            .padding(horizontal = 14.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Folder, contentDescription = null, tint = Muted, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(if (loading) "Loading projects…" else "Add your first project", color = Ink, fontSize = 14.sp)
+            if (!loading) Text("Choose a folder, create one, or clone a repository.", color = Muted, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun EmptyProjectChatRow(onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 54.dp, top = 8.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Add, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(9.dp))
+        Text("Start a chat in this project", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun NewChatProjectDialog(
+    projects: List<PandoraProject>,
+    onDismiss: () -> Unit,
+    onStartChat: (String?) -> Unit,
+    onChooseFolder: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Start a new chat") },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                if (projects.isNotEmpty()) {
+                    Text("PROJECT", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    projects.forEach { project ->
+                        ProjectChoiceRow(
+                            icon = Icons.Rounded.Folder,
+                            title = project.name,
+                            subtitle = project.displayPath,
+                            onClick = { onStartChat(project.path) },
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                ProjectChoiceRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = "No project",
+                    subtitle = "Start in your home directory",
+                    onClick = { onStartChat(null) },
+                )
+                ProjectChoiceRow(
+                    icon = Icons.Rounded.Add,
+                    title = "Choose another folder…",
+                    subtitle = "Add it as a project",
+                    onClick = onChooseFolder,
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun AddProjectDialog(
+    catalog: ProjectCatalog,
+    initialStep: AddProjectStep,
+    registeredPaths: Set<String>,
+    onDismiss: () -> Unit,
+    onProjectReady: (PandoraProject) -> Unit,
+) {
+    var step by remember(initialStep) { mutableStateOf(initialStep) }
+    var value by remember(step) { mutableStateOf("") }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val folders = remember(step, registeredPaths) {
+        if (step == AddProjectStep.ChooseFolder) {
+            catalog.discoverFolders().filterNot { it.path in registeredPaths }
+        } else {
+            emptyList()
+        }
+    }
+
+    fun submit(block: () -> PandoraProject) {
+        if (loading) return
+        scope.launch {
+            loading = true
+            error = null
+            val result = withContext(Dispatchers.IO) { runCatching(block) }
+            loading = false
+            result.onSuccess(onProjectReady).onFailure {
+                error = it.message ?: "Could not add this project"
+            }
+        }
+    }
+
+    val title = when (step) {
+        AddProjectStep.Menu -> "Add project"
+        AddProjectStep.ChooseFolder -> "Choose a folder"
+        AddProjectStep.CreateFolder -> "Create a folder"
+        AddProjectStep.CloneRepository -> "Clone repository"
+    }
+    AlertDialog(
+        onDismissRequest = { if (!loading) onDismiss() },
+        title = { Text(title) },
+        text = {
+            Column(Modifier.heightIn(max = 430.dp).verticalScroll(rememberScrollState())) {
+                when (step) {
+                    AddProjectStep.Menu -> {
+                        ProjectChoiceRow(
+                            icon = Icons.Rounded.Folder,
+                            title = "Choose folder",
+                            subtitle = "Use an existing folder in /root",
+                            onClick = { step = AddProjectStep.ChooseFolder },
+                        )
+                        ProjectChoiceRow(
+                            icon = Icons.Rounded.Add,
+                            title = "Create new folder",
+                            subtitle = "Start a new local project",
+                            onClick = { step = AddProjectStep.CreateFolder },
+                        )
+                        ProjectChoiceRow(
+                            icon = Icons.AutoMirrored.Rounded.ArrowForward,
+                            title = "Clone repository",
+                            subtitle = "Clone a Git repository into /root",
+                            onClick = { step = AddProjectStep.CloneRepository },
+                        )
+                    }
+                    AddProjectStep.ChooseFolder -> {
+                        if (folders.isEmpty()) {
+                            Text("No ungrouped folders found in /root.", color = Muted, fontSize = 13.sp)
+                        } else {
+                            folders.forEach { project ->
+                                ProjectChoiceRow(
+                                    icon = Icons.Rounded.Folder,
+                                    title = project.name,
+                                    subtitle = project.displayPath,
+                                    enabled = !loading,
+                                    onClick = { submit { catalog.register(project.path) } },
+                                )
+                            }
+                        }
+                    }
+                    AddProjectStep.CreateFolder, AddProjectStep.CloneRepository -> {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { value = it; error = null },
+                            enabled = !loading,
+                            singleLine = true,
+                            label = {
+                                Text(if (step == AddProjectStep.CreateFolder) "Folder name" else "Repository URL")
+                            },
+                            placeholder = {
+                                Text(if (step == AddProjectStep.CreateFolder) "my-project" else "https://github.com/…")
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = {
+                                if (value.isNotBlank()) submit {
+                                    if (step == AddProjectStep.CreateFolder) catalog.createFolder(value)
+                                    else catalog.cloneRepository(value)
+                                }
+                            }),
+                        )
+                    }
+                }
+                if (error != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(error.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
+                if (loading) {
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(9.dp))
+                        Text(
+                            if (step == AddProjectStep.CloneRepository) "Cloning repository…" else "Adding project…",
+                            color = Muted,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (step == AddProjectStep.CreateFolder || step == AddProjectStep.CloneRepository) {
+                TextButton(
+                    enabled = value.isNotBlank() && !loading,
+                    onClick = {
+                        submit {
+                            if (step == AddProjectStep.CreateFolder) catalog.createFolder(value)
+                            else catalog.cloneRepository(value)
+                        }
+                    },
+                ) { Text(if (step == AddProjectStep.CreateFolder) "Create" else "Clone") }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                enabled = !loading,
+                onClick = { if (step == initialStep || step == AddProjectStep.Menu) onDismiss() else step = AddProjectStep.Menu },
+            ) { Text(if (step == initialStep || step == AddProjectStep.Menu) "Cancel" else "Back") }
+        },
+    )
+}
+
+@Composable
+private fun ProjectChoiceRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(38.dp).background(SoftSurface, CircleShape), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = if (enabled) Ink else Muted, modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = if (enabled) Ink else Muted, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(subtitle, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun RenameProjectDialog(
+    project: PandoraProject,
+    loading: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onRename: (String) -> Unit,
+) {
+    var name by remember(project.path) { mutableStateOf(project.name) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename project") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { if (it.length <= 64) name = it },
+                    enabled = !loading,
+                    singleLine = true,
+                    label = { Text("Project name") },
+                    supportingText = {
+                        if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
+                        else Text("The folder name and path stay unchanged.")
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onRename(name) }, enabled = name.isNotBlank() && !loading) {
+                if (loading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(if (loading) "Renaming…" else "Rename")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun DeleteProjectDialog(
+    project: PandoraProject,
+    chatCount: Int,
+    loading: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete ${project.name}?") },
+        text = {
+            Column {
+                Text(
+                    if (chatCount == 0) {
+                        "This removes the project from Pandora. The directory and its files stay untouched."
+                    } else {
+                        "This permanently deletes $chatCount ${if (chatCount == 1) "chat" else "chats"} and removes the project from Pandora. The directory and its files stay untouched."
+                    },
+                )
+                if (error != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(error, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDelete, enabled = !loading) {
+                if (loading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    if (loading) "Deleting…" else "Delete",
+                    color = if (loading) Muted else MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Cancel") } },
+    )
 }
 
 private sealed interface WorkspaceEntry {
@@ -611,7 +1278,8 @@ private fun DeleteEntryDialog(
 @Composable
 private fun WorkspaceEntryRow(
     entry: WorkspaceEntry,
-    onOpenChat: (String) -> Unit,
+    nested: Boolean = false,
+    onOpenChat: (String, String) -> Unit,
     onOpenTerminal: (ManagedTerminalSession) -> Unit,
     onRestartTerminal: (ManagedTerminalSession) -> Unit,
     onOpenPersistentTerminal: (String) -> Unit,
@@ -657,7 +1325,7 @@ private fun WorkspaceEntryRow(
                 .combinedClickable(
                     onClick = {
                         when (entry) {
-                            is WorkspaceEntry.Chat -> onOpenChat(entry.chat.id)
+                            is WorkspaceEntry.Chat -> onOpenChat(entry.chat.id, entry.chat.cwd)
                             is WorkspaceEntry.TerminalSession -> onOpenTerminal(entry.session)
                             is WorkspaceEntry.PersistentTerminal -> onOpenPersistentTerminal(entry.name)
                         }
@@ -665,7 +1333,7 @@ private fun WorkspaceEntryRow(
                     onLongClick = { menuExpanded = true },
                     onLongClickLabel = "More actions",
                 )
-                .padding(vertical = 11.dp),
+                .padding(start = if (nested) 30.dp else 0.dp, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
         Box(

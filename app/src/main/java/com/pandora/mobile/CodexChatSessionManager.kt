@@ -8,7 +8,7 @@ class CodexChatSessionManager(private val context: Context) {
     var current: CodexChatSession? = null
         private set
 
-    fun create(threadId: String? = null): CodexChatSession {
+    fun create(threadId: String? = null, cwd: String = "/root"): CodexChatSession {
         val existing = current
         if (
             threadId != null &&
@@ -19,6 +19,6 @@ class CodexChatSessionManager(private val context: Context) {
             return existing
         }
         current?.close()
-        return CodexChatSession(context, threadId).also { current = it }
+        return CodexChatSession(context, threadId, cwd).also { current = it }
     }
 }

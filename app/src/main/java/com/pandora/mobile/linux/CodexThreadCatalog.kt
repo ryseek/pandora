@@ -13,6 +13,7 @@ data class CodexThreadSummary(
     val title: String,
     val preview: String,
     val updatedAtMillis: Long,
+    val cwd: String,
 )
 
 /** Reads durable native Codex threads without keeping another app-server process alive. */
@@ -33,6 +34,7 @@ class CodexThreadCatalog(context: Context) {
                             title = item.getString("title"),
                             preview = item.optString("preview"),
                             updatedAtMillis = item.getLong("updatedAtMillis"),
+                            cwd = item.optString("cwd", "/root").ifBlank { "/root" },
                         ),
                     )
                 }
@@ -111,6 +113,7 @@ class CodexThreadCatalog(context: Context) {
                                     .take(64),
                                 preview = preview,
                                 updatedAtMillis = item.optLong("updatedAt") * 1000L,
+                                cwd = item.optString("cwd", "/root").ifBlank { "/root" },
                             ),
                         )
                     }
@@ -194,7 +197,8 @@ class CodexThreadCatalog(context: Context) {
                     .put("id", thread.id)
                     .put("title", thread.title)
                     .put("preview", thread.preview)
-                    .put("updatedAtMillis", thread.updatedAtMillis),
+                    .put("updatedAtMillis", thread.updatedAtMillis)
+                    .put("cwd", thread.cwd),
             )
         }
         cache.parentFile?.mkdirs()

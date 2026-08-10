@@ -20,6 +20,7 @@ This milestone includes:
 - a PRoot-compatible Codex full-access default, avoiding unsupported Bubblewrap/user-namespace sandboxing;
 - live Codex allowance on Home through the official app-server rate-limit API, with tap-to-refresh and offline/sign-in states;
 - durable native Codex chat threads using `thread/list`, `thread/start`, `thread/resume`, and `turn/start`, with streamed agent messages, model selection, and full local workspace tools;
+- directory-based projects that group chats by Codex working directory, with existing-folder, new-folder, and Git-clone creation flows;
 - a Settings helper that opens Codex browser login and keeps the OAuth exchange active in the background;
 - versioned workspace backup and staged restore from Settings, including projects, configuration, credentials, executable bits, and symlinks;
 - package installation and network access from the container.
