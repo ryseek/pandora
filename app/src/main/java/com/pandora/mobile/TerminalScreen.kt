@@ -1,7 +1,6 @@
 package com.pandora.mobile
 
-import android.content.Intent
-import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,12 +25,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,13 +40,7 @@ import androidx.compose.ui.unit.sp
 import com.openminis.app.ui.terminal.canvas.TerminalInputView
 import com.openminis.app.ui.terminal.canvas.TerminalNativeViewCompose
 import com.openminis.app.ui.terminal.canvas.rememberTerminalInputController
-import com.openminis.app.ui.terminal.emulator.TerminalEmulator
 import com.pandora.mobile.linux.PtyTerminalSession
-import com.pandora.mobile.linux.RootfsInstaller
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private val TerminalBackground = Color.Black
 private val AccessoryBackground = Color(0xFF111310)
@@ -58,29 +48,20 @@ private val AccessoryActive = Color(0xFF6757DE)
 private val AccessoryText = Color(0xFFE6E8E2)
 
 @Composable
-fun TerminalScreen(initialCommand: String? = null, onBack: () -> Unit) {
-    val context = LocalContext.current.applicationContext
-    val session = remember { PtyTerminalSession(context) }
-    val emulator = remember { TerminalEmulator() }
+fun TerminalScreen(
+    session: ManagedTerminalSession,
+    onBack: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val context = LocalContext.current
+    val emulator = session.emulator
     val terminalFontSize = remember { AppSettings.terminalFontSize(context) }
     val input = rememberTerminalInputController()
-    val scope = rememberCoroutineScope()
     val sessionState by session.state.collectAsState()
+    val status by session.status.collectAsState()
     var ctrlActive by remember { mutableStateOf(false) }
     var altActive by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Preparing Linux…") }
-    var showRepair by remember { mutableStateOf(false) }
-    var repairing by remember { mutableStateOf(false) }
-    var repairError by remember { mutableStateOf<String?>(null) }
-    var loginUrlOpened by remember { mutableStateOf(false) }
-    val loginOutput = remember { StringBuilder() }
-    val isCodexLogin = initialCommand?.startsWith("codex login") == true
-
-    DisposableEffect(Unit) {
-        LinuxSessionService.start(context)
-        onDispose { LinuxSessionService.stop(context) }
-    }
-
+    var showStop by remember { mutableStateOf(false) }
     fun send(bytes: ByteArray) {
         if (bytes.isEmpty()) return
         emulator.scrollOffset = 0
@@ -97,40 +78,9 @@ fun TerminalScreen(initialCommand: String? = null, onBack: () -> Unit) {
         session.send(outgoing)
     }
 
-    LaunchedEffect(session) {
-        emulator.onResponse = session::send
-        launch {
-            session.output.collect { bytes ->
-                emulator.feed(bytes)
-                if (isCodexLogin) {
-                    loginOutput.append(bytes.toString(Charsets.UTF_8))
-                    if (loginOutput.length > 16_384) loginOutput.delete(0, loginOutput.length - 16_384)
-                    if (!loginUrlOpened) {
-                        val url = LOGIN_URL.findAll(loginOutput)
-                            .map { it.value.trimEnd('.', ',', ')', ']', '\u001B') }
-                            .firstOrNull { it.contains("openai.com") || it.contains("chatgpt.com") }
-                        if (url != null) {
-                            loginUrlOpened = true
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        session.start { status = it }
-    }
-
-    LaunchedEffect(sessionState, initialCommand) {
-        if (sessionState == PtyTerminalSession.State.RUNNING && initialCommand != null) {
-            delay(350)
-            session.send((initialCommand + "\r").toByteArray())
-        }
-    }
-
-    DisposableEffect(session) {
-        onDispose { session.stop() }
+    BackHandler {
+        input.clearFocus()
+        onBack()
     }
 
     Box(Modifier.fillMaxSize().background(TerminalBackground)) {
@@ -183,11 +133,11 @@ fun TerminalScreen(initialCommand: String? = null, onBack: () -> Unit) {
                 input.clearFocus()
                 onBack()
             },
+            onStop = { showStop = true },
             onClear = {
                 send(byteArrayOf(0x15))
                 emulator.feed("\u001Bc".toByteArray())
             },
-            onRepair = { showRepair = true },
         )
 
         TerminalAccessoryRow(
@@ -206,91 +156,75 @@ fun TerminalScreen(initialCommand: String? = null, onBack: () -> Unit) {
             },
         )
 
-        if (showRepair) {
+        if (showStop) {
             AlertDialog(
-                onDismissRequest = { if (!repairing) showRepair = false },
-                title = { Text(if (repairing) "Repairing Linux…" else "Repair Linux container?") },
-                text = {
-                    Text(
-                        repairError ?: if (repairing) {
-                            status
-                        } else {
-                            "Alpine system files and installed packages will be reset. Files and projects in /root will remain untouched."
-                        },
-                    )
-                },
+                onDismissRequest = { showStop = false },
+                title = { Text("Stop this Linux session?") },
+                text = { Text("The running shell and its child processes will end. Files in /root will remain saved.") },
                 confirmButton = {
-                    if (repairing) {
-                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                    } else {
-                        TextButton(onClick = {
-                            repairing = true
-                            repairError = null
-                            input.clearFocus()
-                            session.stop()
-                            scope.launch {
-                                runCatching {
-                                    withContext(Dispatchers.IO) {
-                                        RootfsInstaller(context).repair { status = it }
-                                    }
-                                }.onSuccess {
-                                    showRepair = false
-                                    repairing = false
-                                    onBack()
-                                }.onFailure { error ->
-                                    repairing = false
-                                    repairError = "Repair failed: ${error.message}"
-                                }
-                            }
-                        }) { Text("Repair") }
-                    }
+                    TextButton(onClick = {
+                        showStop = false
+                        input.clearFocus()
+                        onStop()
+                    }) { Text("Stop session", color = Color(0xFFD84B4B)) }
                 },
                 dismissButton = {
-                    if (!repairing) {
-                        TextButton(onClick = { showRepair = false }) { Text(if (repairError == null) "Cancel" else "Close") }
-                    }
+                    TextButton(onClick = { showStop = false }) { Text("Keep running") }
                 },
             )
         }
     }
 }
 
-private val LOGIN_URL = Regex("""https://[^\s\u001B]+""")
-
 @Composable
 private fun TerminalTopBar(
     modifier: Modifier,
     onBack: () -> Unit,
+    onStop: () -> Unit,
     onClear: () -> Unit,
-    onRepair: () -> Unit,
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth().height(46.dp).background(TerminalBackground).padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Box(
+        modifier = modifier.fillMaxWidth().height(46.dp).background(TerminalBackground),
     ) {
         Text(
             "‹",
-            modifier = Modifier.clickable(onClick = onBack).padding(horizontal = 8.dp, vertical = 5.dp),
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .clickable(onClick = onBack)
+                .padding(horizontal = 18.dp, vertical = 5.dp),
             color = Color.White,
             fontSize = 28.sp,
         )
-        Spacer(Modifier.weight(1f))
-        Text("Pandora Linux", color = Color(0xFFDADDD6), fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-        Spacer(Modifier.weight(1f))
         Text(
-            "repair",
-            modifier = Modifier.clickable(onClick = onRepair).padding(horizontal = 7.dp, vertical = 8.dp),
+            "Pandora Linux",
+            modifier = Modifier.align(Alignment.Center),
             color = Color(0xFFDADDD6),
-            fontSize = 12.sp,
+            fontSize = 13.sp,
             fontFamily = FontFamily.Monospace,
+            maxLines = 1,
         )
-        Text(
-            "clear",
-            modifier = Modifier.clickable(onClick = onClear).padding(horizontal = 7.dp, vertical = 8.dp),
-            color = Color(0xFF9E90FF),
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-        )
+        Row(
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 58.dp, height = 34.dp)
+                    .background(Color(0xFF7D2424), RoundedCornerShape(7.dp))
+                    .clickable(onClick = onStop),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("■ stop", color = Color(0xFFFFDADA), fontSize = 10.sp, fontFamily = FontFamily.Monospace, maxLines = 1)
+            }
+            Text(
+                "clear",
+                modifier = Modifier.clickable(onClick = onClear).padding(horizontal = 8.dp, vertical = 8.dp),
+                color = Color(0xFF9E90FF),
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+            )
+        }
     }
 }
 

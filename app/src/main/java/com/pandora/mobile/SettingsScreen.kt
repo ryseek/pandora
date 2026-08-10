@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pandora.mobile.linux.RootfsInstaller
 import com.pandora.mobile.linux.WorkspaceBackup
 import java.io.File
 import java.text.SimpleDateFormat
@@ -60,12 +61,20 @@ private val SettingsLine = Color(0xFFE3E3DD)
 private val SettingsAccent = Color(0xFF6D5CE7)
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onCodexLogin: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onCodexLogin: () -> Unit,
+    onStopAllForRepair: () -> Unit,
+) {
     val context = LocalContext.current
     var fontSize by remember { mutableFloatStateOf(AppSettings.terminalFontSize(context)) }
     var backupBusy by remember { mutableStateOf(false) }
     var backupStatus by remember { mutableStateOf<String?>(null) }
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
+    var showRepair by remember { mutableStateOf(false) }
+    var repairing by remember { mutableStateOf(false) }
+    var repairStatus by remember { mutableStateOf<String?>(null) }
+    var repairError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val backup = remember { WorkspaceBackup(context.filesDir, context.cacheDir) }
     val codexInstalled = remember { File(context.filesDir, "linux-workspace/.local/bin/codex").exists() }
@@ -181,6 +190,31 @@ fun SettingsScreen(onBack: () -> Unit, onCodexLogin: () -> Unit) {
                     lineHeight = (fontSize * 1.45f).sp,
                     fontFamily = FontFamily.Monospace,
                 )
+            }
+
+            Spacer(Modifier.height(28.dp))
+            Text("CONTAINER", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Maintenance for the Alpine Linux system. Your persistent /root workspace is stored separately.",
+                color = SettingsMuted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+            BackupAction(
+                title = "Repair Linux container",
+                subtitle = "Reinstall system files and required packages",
+                symbol = "↻",
+                enabled = !repairing && !backupBusy,
+                onClick = {
+                    repairError = null
+                    showRepair = true
+                },
+            )
+            if (repairStatus != null && !showRepair) {
+                Spacer(Modifier.height(12.dp))
+                Text(repairStatus.orEmpty(), color = SettingsMuted, fontSize = 13.sp)
             }
 
             Spacer(Modifier.height(28.dp))
@@ -300,6 +334,55 @@ fun SettingsScreen(onBack: () -> Unit, onCodexLogin: () -> Unit) {
             },
             dismissButton = {
                 TextButton(enabled = !backupBusy, onClick = { restoreUri = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showRepair) {
+        AlertDialog(
+            onDismissRequest = { if (!repairing) showRepair = false },
+            title = { Text(if (repairing) "Repairing Linux…" else "Repair Linux container?") },
+            text = {
+                Text(
+                    repairError ?: if (repairing) {
+                        repairStatus ?: "Preparing repair…"
+                    } else {
+                        "All Linux sessions will stop. Alpine system files and installed packages will be reset. Files and projects in /root will remain untouched."
+                    },
+                )
+            },
+            confirmButton = {
+                if (repairing) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                } else {
+                    TextButton(onClick = {
+                        repairing = true
+                        repairStatus = "Preparing repair…"
+                        repairError = null
+                        onStopAllForRepair()
+                        scope.launch {
+                            runCatching {
+                                withContext(Dispatchers.IO) {
+                                    RootfsInstaller(context.applicationContext).repair { repairStatus = it }
+                                }
+                            }.onSuccess {
+                                repairing = false
+                                repairStatus = "Repair complete"
+                                showRepair = false
+                            }.onFailure { error ->
+                                repairing = false
+                                repairError = "Repair failed: ${error.message}"
+                            }
+                        }
+                    }) { Text("Repair") }
+                }
+            },
+            dismissButton = {
+                if (!repairing) {
+                    TextButton(onClick = { showRepair = false }) {
+                        Text(if (repairError == null) "Cancel" else "Close")
+                    }
+                }
             },
         )
     }

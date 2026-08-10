@@ -18,31 +18,35 @@ class RootfsInstaller(private val context: Context) {
     private val workspaceMarker = File(context.filesDir, ".pandora-workspace-v1")
 
     fun installIfNeeded(onStatus: (String) -> Unit) {
-        tempDir.mkdirs()
-        ensurePersistentWorkspace(onStatus)
-        ensureCodexDefaults()
-        check(proot.exists()) { "Bundled PRoot runtime is missing" }
+        synchronized(INSTALL_LOCK) {
+            tempDir.mkdirs()
+            ensurePersistentWorkspace(onStatus)
+            ensureCodexDefaults()
+            check(proot.exists()) { "Bundled PRoot runtime is missing" }
 
-        if (!marker.exists()) {
-            onStatus("Installing Alpine Linux…")
-            installFreshRootfs()
+            if (!marker.exists()) {
+                onStatus("Installing Alpine Linux…")
+                installFreshRootfs()
+            }
+            installDefaultPackages(onStatus)
+            installCodexIfNeeded(onStatus)
+            onStatus("Starting container…")
         }
-        installDefaultPackages(onStatus)
-        installCodexIfNeeded(onStatus)
-        onStatus("Starting container…")
     }
 
     /** Replaces the Linux system image while leaving the separately-mounted /root intact. */
     fun repair(onStatus: (String) -> Unit) {
-        tempDir.mkdirs()
-        ensurePersistentWorkspace(onStatus)
-        ensureCodexDefaults()
-        check(proot.exists()) { "Bundled PRoot runtime is missing" }
-        onStatus("Repairing Alpine Linux…")
-        installFreshRootfs()
-        installDefaultPackages(onStatus)
-        installCodexIfNeeded(onStatus)
-        onStatus("Repair complete")
+        synchronized(INSTALL_LOCK) {
+            tempDir.mkdirs()
+            ensurePersistentWorkspace(onStatus)
+            ensureCodexDefaults()
+            check(proot.exists()) { "Bundled PRoot runtime is missing" }
+            onStatus("Repairing Alpine Linux…")
+            installFreshRootfs()
+            installDefaultPackages(onStatus)
+            installCodexIfNeeded(onStatus)
+            onStatus("Repair complete")
+        }
     }
 
     private fun installFreshRootfs() {
@@ -81,17 +85,7 @@ class RootfsInstaller(private val context: Context) {
             "/sbin/apk", "add", "--no-cache",
         ).apply { addAll(DEFAULT_PACKAGES) }
 
-        val process = ProcessBuilder(command).redirectErrorStream(true).apply {
-            environment().apply {
-                put("PROOT_TMP_DIR", tempDir.absolutePath)
-                put("LD_LIBRARY_PATH", nativeLibDir.absolutePath)
-                put("PROOT_LOADER", File(nativeLibDir, "libproot-loader.so").absolutePath)
-                put("PROOT_LOADER_32", File(nativeLibDir, "libproot-loader32.so").absolutePath)
-                put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
-                put("HOME", "/root")
-                put("TERM", "dumb")
-            }
-        }.start()
+        val process = startContainerProcess(command, mergeError = true)
 
         val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
         val exitCode = process.waitFor()
@@ -142,18 +136,53 @@ class RootfsInstaller(private val context: Context) {
         }
     }
 
-    /** Android/PRoot has no desktop keyring, so Codex credentials must use its private file store. */
+    /**
+     * Android/PRoot has neither a desktop keyring nor the user namespaces Bubblewrap needs.
+     * Keep these machine-level Codex settings above any TOML tables so they apply globally.
+     */
     private fun ensureCodexDefaults() {
         val config = File(workspace, ".codex/config.toml")
-        val current = config.takeIf { it.exists() }?.readText().orEmpty()
-        if (current.lineSequence().none { it.trimStart().startsWith("cli_auth_credentials_store") }) {
-            config.parentFile?.mkdirs()
-            val separator = if (current.isNotEmpty() && !current.endsWith('\n')) "\n" else ""
-            config.appendText(separator + "cli_auth_credentials_store = \"file\"\n")
-        }
+        var current = config.takeIf { it.exists() }?.readText().orEmpty()
+        current = setTopLevelTomlSetting(
+            content = current,
+            key = "cli_auth_credentials_store",
+            value = "\"file\"",
+            replaceExisting = false,
+        )
+        current = setTopLevelTomlSetting(
+            content = current,
+            key = "sandbox_mode",
+            value = "\"danger-full-access\"",
+            replaceExisting = true,
+        )
+        config.parentFile?.mkdirs()
+        if (!config.exists() || config.readText() != current) config.writeText(current)
     }
 
-    private fun containerCommand(vararg executableAndArgs: String): List<String> = listOf(
+    private fun setTopLevelTomlSetting(
+        content: String,
+        key: String,
+        value: String,
+        replaceExisting: Boolean,
+    ): String {
+        val lines = content.trimEnd().let { trimmed ->
+            if (trimmed.isEmpty()) mutableListOf() else trimmed.lines().toMutableList()
+        }
+        val firstTable = lines.indexOfFirst { it.trimStart().startsWith('[') }.let {
+            if (it == -1) lines.size else it
+        }
+        val settingPattern = Regex("^${Regex.escape(key)}\\s*=")
+        val existing = lines.take(firstTable).indexOfFirst { settingPattern.containsMatchIn(it.trimStart()) }
+        val setting = "$key = $value"
+        if (existing >= 0) {
+            if (replaceExisting) lines[existing] = setting
+        } else {
+            lines.add(firstTable, setting)
+        }
+        return lines.joinToString("\n").trimEnd() + "\n"
+    }
+
+    internal fun containerCommand(vararg executableAndArgs: String): List<String> = listOf(
         proot.absolutePath,
         "-0",
         "--link2symlink",
@@ -166,8 +195,8 @@ class RootfsInstaller(private val context: Context) {
         *executableAndArgs,
     )
 
-    private fun runContainerCommand(command: List<String>): Pair<Int, String> {
-        val process = ProcessBuilder(command).redirectErrorStream(true).apply {
+    internal fun startContainerProcess(command: List<String>, mergeError: Boolean): Process =
+        ProcessBuilder(command).redirectErrorStream(mergeError).apply {
             environment().apply {
                 put("PROOT_TMP_DIR", tempDir.absolutePath)
                 put("LD_LIBRARY_PATH", nativeLibDir.absolutePath)
@@ -178,6 +207,9 @@ class RootfsInstaller(private val context: Context) {
                 put("TERM", "dumb")
             }
         }.start()
+
+    private fun runContainerCommand(command: List<String>): Pair<Int, String> {
+        val process = startContainerProcess(command, mergeError = true)
         val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
         return process.waitFor() to output
     }
@@ -300,6 +332,7 @@ class RootfsInstaller(private val context: Context) {
 
     private companion object {
         const val TAG = "RootfsInstaller"
+        val INSTALL_LOCK = Any()
         val DEFAULT_PACKAGES = listOf(
             "ca-certificates",
             "ssl_client",

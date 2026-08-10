@@ -12,8 +12,11 @@ This milestone includes:
 - a keyboard-safe viewport and pinned Esc/Tab/Ctrl/Alt/navigation key row;
 - a persistent terminal font-size setting with preview;
 - a foreground Linux-session service that keeps the PTY and network alive while Pandora is briefly backgrounded;
+- multiple retained terminal sessions with preserved scrollback, explicit Stop controls, and navigation that leaves processes running;
 - reproducible default packages after install and Repair (`ca-certificates`, `ssl_client`, `lscpu`, `util-linux`, `nodejs`, `npm`, `git`, `ripgrep`);
 - a persistent Codex CLI installation under `/root/.local`, preserved across Repair;
+- a PRoot-compatible Codex full-access default, avoiding unsupported Bubblewrap/user-namespace sandboxing;
+- live Codex allowance on Home through the official app-server rate-limit API, with tap-to-refresh and offline/sign-in states;
 - a Settings helper that opens Codex browser login and keeps the OAuth exchange active in the background;
 - versioned workspace backup and staged restore from Settings, including projects, configuration, credentials, executable bits, and symlinks;
 - package installation and network access from the container.
@@ -37,6 +40,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 The APK contains an Alpine ARM64 minirootfs and a PRoot executable. On first container launch, the rootfs is extracted to the app's private files directory. `/root` is stored separately and mounted into the container, so Repair can replace damaged Linux system files without touching user projects, Codex, or Codex configuration. Repair resets non-default packages installed with `apk` and system-level configuration, then reapplies Pandora's versioned default package manifest.
 
 This is a userspace Linux environment sharing Android's kernel, not a VM and not a security boundary. The shell is attached to a native PTY, so terminal sizing, signals, arrow keys, and interactive full-screen TTY programs behave normally.
+
+Codex runs with `sandbox_mode = "danger-full-access"` because Android's PRoot environment cannot provide the user namespaces and `/proc/sys` access required by Bubblewrap. Codex commands can therefore read and modify the complete Pandora Linux workspace without an additional sandbox boundary.
 
 Workspace backups are portable ZIP files containing the complete persistent `/root`. They therefore contain sensitive Codex and GitHub sessions and should be stored accordingly. Restore validates and extracts into staging before atomically replacing the current workspace.
 
