@@ -1,8 +1,12 @@
 package com.pandora.mobile
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
@@ -48,6 +52,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
@@ -60,6 +65,7 @@ import androidx.compose.material.icons.rounded.MicNone
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -89,6 +95,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -98,6 +108,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.pandora.mobile.linux.CodexLimitWindow
 import com.pandora.mobile.linux.CodexLimitsState
 import com.pandora.mobile.linux.ChatMessage
@@ -148,6 +162,7 @@ private fun PandoraApp() {
     val sessions by sessionManager.sessions.collectAsState()
     val sessionRevision by sessionManager.revision.collectAsState()
     var screen by remember { mutableStateOf(Screen.Home) }
+    var settingsReturnScreen by remember { mutableStateOf(Screen.Home) }
     var selectedSessionId by remember { mutableStateOf<String?>(null) }
     var themePreference by remember { mutableStateOf(AppSettings.theme(context)) }
     PandoraTheme(themePreference) {
@@ -193,14 +208,24 @@ private fun PandoraApp() {
                             selectedSessionId = sessionManager.attach(name).id
                             screen = Screen.Container
                         },
-                        onSettings = { screen = Screen.Settings },
+                        onSettings = {
+                            settingsReturnScreen = Screen.Home
+                            screen = Screen.Settings
+                        },
                     )
                     Screen.Chat -> {
                         val chat = chatManager.current
                         if (chat == null) {
                             LaunchedEffect(Unit) { screen = Screen.Home }
                         } else {
-                            ChatScreen(session = chat, onBack = { screen = Screen.Home })
+                            ChatScreen(
+                                session = chat,
+                                onBack = { screen = Screen.Home },
+                                onSettings = {
+                                    settingsReturnScreen = Screen.Chat
+                                    screen = Screen.Settings
+                                },
+                            )
                         }
                     }
                     Screen.Container -> {
@@ -232,7 +257,7 @@ private fun PandoraApp() {
                             AppSettings.setTheme(context, it)
                             themePreference = it
                         },
-                        onBack = { screen = Screen.Home },
+                        onBack = { screen = settingsReturnScreen },
                         onCodexLogin = {
                             // PRoot shares Android's network namespace, so Chrome can return
                             // directly to Codex's localhost callback. This avoids the device-code
@@ -1750,14 +1775,25 @@ private fun Header(title: String, detail: String? = null, onBack: () -> Unit, da
 }
 
 @Composable
-private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit) {
+private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings: () -> Unit) {
     BackHandler(onBack = onBack)
+    val context = LocalContext.current
+    val application = context.applicationContext as PandoraApplication
+    val speech = application.onDeviceSpeech
+    val speechModels = application.speechModels
+    val dictation by speech.dictation.collectAsState()
+    val playback by speech.playback.collectAsState()
     var draft by remember { mutableStateOf("") }
+    var dictationPrefix by remember { mutableStateOf("") }
+    var missingSpeechKind by remember { mutableStateOf<SpeechModelKind?>(null) }
     val messages by session.messages.collectAsState()
     val state by session.state.collectAsState()
     val models by session.models.collectAsState()
     val selectedModel by session.selectedModel.collectAsState()
     var modelMenuOpen by remember { mutableStateOf(false) }
+    var lastAutoSpokenId by remember {
+        mutableStateOf(messages.lastOrNull { it.role == ChatRole.ASSISTANT }?.id)
+    }
     val listState = rememberLazyListState()
     val ready = state is CodexChatState.Ready
     val detail = when (val current = state) {
@@ -1769,6 +1805,73 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit) {
     }
     fun submit() {
         if (session.send(draft)) draft = ""
+    }
+    val microphonePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) speech.startDictation()
+        else speech.microphonePermissionDenied()
+    }
+    fun beginDictation() {
+        val model = SpeechModels.find(AppSettings.speechToTextModel(context))
+        if (model == null || !speechModels.isInstalled(model)) {
+            missingSpeechKind = SpeechModelKind.SPEECH_TO_TEXT
+            return
+        }
+        dictationPrefix = draft.trim()
+        speech.clearDictation()
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            speech.startDictation()
+        } else {
+            microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+    fun readAloud(text: String) {
+        val model = SpeechModels.find(AppSettings.textToSpeechModel(context))
+        if (model == null || !speechModels.isInstalled(model)) {
+            missingSpeechKind = SpeechModelKind.TEXT_TO_SPEECH
+        } else if (playback is SpeechPlaybackState.Loading || playback is SpeechPlaybackState.Speaking) {
+            speech.stopSpeaking()
+        } else {
+            speech.speak(text)
+        }
+    }
+    LaunchedEffect(dictation) {
+        val spoken = when (val current = dictation) {
+            is DictationState.Listening -> current.text
+            is DictationState.Finished -> current.text
+            else -> null
+        }
+        if (spoken != null) {
+            draft = when {
+                dictationPrefix.isBlank() -> spoken
+                spoken.isBlank() -> dictationPrefix
+                else -> "$dictationPrefix $spoken"
+            }
+        }
+        if (dictation is DictationState.Finished) speech.clearDictation()
+    }
+    LaunchedEffect(state, messages.size) {
+        val latest = messages.lastOrNull { it.role == ChatRole.ASSISTANT && it.text.isNotBlank() }
+        if (state is CodexChatState.Ready && latest != null && latest.id != lastAutoSpokenId) {
+            lastAutoSpokenId = latest.id
+            if (AppSettings.speakAssistantResponses(context)) readAloud(latest.text)
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(session, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                speech.cancelDictation()
+                speech.stopSpeaking()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            speech.cancelDictation()
+            speech.stopSpeaking()
+        }
     }
     LaunchedEffect(messages.size, messages.lastOrNull()?.text) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
@@ -1862,7 +1965,12 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit) {
                     val startsAssistantGroup = message.role != ChatRole.ASSISTANT ||
                         index == 0 ||
                         messages[index - 1].role != ChatRole.ASSISTANT
-                    ChatMessageRow(message, showAssistantIdentity = startsAssistantGroup)
+                    ChatMessageRow(
+                        message,
+                        showAssistantIdentity = startsAssistantGroup,
+                        speaking = playback is SpeechPlaybackState.Loading || playback is SpeechPlaybackState.Speaking,
+                        onSpeak = { readAloud(message.text) },
+                    )
                 }
             }
         }
@@ -1872,6 +1980,15 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit) {
                     .fillMaxWidth()
                     .padding(horizontal = 18.dp, vertical = 2.dp),
             )
+        }
+        when (val current = dictation) {
+            DictationState.Loading -> VoiceStatus("Loading dictation model…", active = true)
+            is DictationState.Listening -> VoiceStatus("Listening · tap the microphone to finish", active = true)
+            is DictationState.Failed -> VoiceStatus(current.detail, active = false)
+            else -> Unit
+        }
+        if (playback is SpeechPlaybackState.Failed) {
+            VoiceStatus((playback as SpeechPlaybackState.Failed).detail, active = false)
         }
         Row(
             modifier = Modifier
@@ -1911,14 +2028,20 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit) {
                 }
             )
             IconButton(
-                onClick = {},
-                enabled = false,
-                modifier = Modifier.size(42.dp),
+                onClick = {
+                    if (dictation is DictationState.Loading || dictation is DictationState.Listening) {
+                        speech.stopDictation()
+                    } else {
+                        beginDictation()
+                    }
+                },
+                enabled = ready,
+                modifier = Modifier.size(48.dp),
             ) {
                 Icon(
-                    Icons.Rounded.MicNone,
-                    contentDescription = "Voice input coming soon",
-                    tint = Muted,
+                    if (dictation is DictationState.Loading || dictation is DictationState.Listening) Icons.Rounded.Stop else Icons.Rounded.MicNone,
+                    contentDescription = if (dictation is DictationState.Loading || dictation is DictationState.Listening) "Stop dictation" else "Start dictation",
+                    tint = if (dictation is DictationState.Loading || dictation is DictationState.Listening) MaterialTheme.colorScheme.error else Accent,
                     modifier = Modifier.size(21.dp),
                 )
             }
@@ -1937,6 +2060,58 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (missingSpeechKind != null) {
+        val dictationMissing = missingSpeechKind == SpeechModelKind.SPEECH_TO_TEXT
+        AlertDialog(
+            onDismissRequest = { missingSpeechKind = null },
+            title = { Text(if (dictationMissing) "Download dictation model?" else "Download a reading voice?") },
+            text = {
+                Text(
+                    if (dictationMissing) {
+                        "On-device dictation needs a one-time model download. The compact default is about 103 MB and stays private on this phone."
+                    } else {
+                        "On-device reading needs a one-time voice download. The compact default is about 20 MB."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    missingSpeechKind = null
+                    onSettings()
+                }) { Text("Choose in Settings") }
+            },
+            dismissButton = {
+                TextButton(onClick = { missingSpeechKind = null }) { Text("Not now") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun VoiceStatus(label: String, active: Boolean) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .semantics {
+                liveRegion = LiveRegionMode.Polite
+                stateDescription = label
+            }
+            .padding(horizontal = 20.dp, vertical = 2.dp)
+            .heightIn(min = 32.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (active) {
+            CircularProgressIndicator(Modifier.size(14.dp), color = Accent, strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(
+            label,
+            color = if (active) Accent else MaterialTheme.colorScheme.error,
+            fontSize = 12.sp,
+            maxLines = 2,
+        )
     }
 }
 
@@ -1962,7 +2137,12 @@ private fun AgentWorkingIndicator(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ChatMessageRow(message: ChatMessage, showAssistantIdentity: Boolean = true) {
+private fun ChatMessageRow(
+    message: ChatMessage,
+    showAssistantIdentity: Boolean = true,
+    speaking: Boolean = false,
+    onSpeak: () -> Unit = {},
+) {
     when (message.role) {
         ChatRole.SYSTEM -> Row(
             modifier = Modifier
@@ -1992,12 +2172,22 @@ private fun ChatMessageRow(message: ChatMessage, showAssistantIdentity: Boolean 
                 lineHeight = 21.sp,
             )
         }
-        ChatRole.ASSISTANT -> AssistantMessage(message, showIdentity = showAssistantIdentity)
+        ChatRole.ASSISTANT -> AssistantMessage(
+            message,
+            showIdentity = showAssistantIdentity,
+            speaking = speaking,
+            onSpeak = onSpeak,
+        )
     }
 }
 
 @Composable
-private fun AssistantMessage(message: ChatMessage, showIdentity: Boolean) {
+private fun AssistantMessage(
+    message: ChatMessage,
+    showIdentity: Boolean,
+    speaking: Boolean,
+    onSpeak: () -> Unit,
+) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(message.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
@@ -2026,13 +2216,24 @@ private fun AssistantMessage(message: ChatMessage, showIdentity: Boolean) {
                     clipboard.setText(AnnotatedString(message.text))
                     copied = true
                 },
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
                     contentDescription = if (copied) "Copied" else "Copy response",
                     tint = if (copied) Accent else Muted,
                     modifier = Modifier.size(17.dp),
+                )
+            }
+            IconButton(
+                onClick = onSpeak,
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    if (speaking) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.VolumeUp,
+                    contentDescription = if (speaking) "Stop reading" else "Read response aloud",
+                    tint = if (speaking) Accent else Muted,
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }

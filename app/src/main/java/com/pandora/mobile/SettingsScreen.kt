@@ -20,22 +20,30 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +54,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -77,6 +88,12 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var fontSize by remember { mutableFloatStateOf(AppSettings.terminalFontSize(context)) }
+    val application = context.applicationContext as PandoraApplication
+    val speechManager = application.speechModels
+    val speechStates by speechManager.states.collectAsState()
+    var selectedStt by remember { mutableStateOf(AppSettings.speechToTextModel(context)) }
+    var selectedTts by remember { mutableStateOf(AppSettings.textToSpeechModel(context)) }
+    var autoSpeak by remember { mutableStateOf(AppSettings.speakAssistantResponses(context)) }
     var backupBusy by remember { mutableStateOf(false) }
     var backupStatus by remember { mutableStateOf<String?>(null) }
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
@@ -124,6 +141,23 @@ fun SettingsScreen(
             AppSettings.MAX_TERMINAL_FONT_SIZE,
         )
         AppSettings.setTerminalFontSize(context, fontSize)
+    }
+
+    fun deleteSpeechModel(model: SpeechModel) {
+        if (!speechManager.delete(model)) return
+        val fallback = SpeechModels.all.firstOrNull {
+            it.kind == model.kind && it.id != model.id && speechManager.isInstalled(it)
+        }
+        when (model.kind) {
+            SpeechModelKind.SPEECH_TO_TEXT -> if (selectedStt == model.id) {
+                selectedStt = fallback?.id ?: SpeechModels.DEFAULT_STT_ID
+                AppSettings.setSpeechToTextModel(context, selectedStt)
+            }
+            SpeechModelKind.TEXT_TO_SPEECH -> if (selectedTts == model.id) {
+                selectedTts = fallback?.id ?: SpeechModels.DEFAULT_TTS_ID
+                AppSettings.setTextToSpeechModel(context, selectedTts)
+            }
+        }
     }
 
     Column(
@@ -181,6 +215,76 @@ fun SettingsScreen(
                     icon = { tint -> Icon(Icons.Rounded.DarkMode, null, tint = tint, modifier = Modifier.size(17.dp)) },
                     modifier = Modifier.weight(1f),
                     onClick = { onThemePreferenceChanged(AppSettings.ThemePreference.DARK) },
+                )
+            }
+
+            Spacer(Modifier.height(30.dp))
+            Text("VOICE", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Speech stays on this device. Models download only when you ask and unload after use.",
+                color = SettingsMuted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(18.dp))
+            Text("Dictation model", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(10.dp))
+            SpeechModels.all.filter { it.kind == SpeechModelKind.SPEECH_TO_TEXT }.forEach { model ->
+                SpeechModelRow(
+                    model = model,
+                    selected = selectedStt == model.id,
+                    state = speechStates[model.id] ?: SpeechModelDownload.NotInstalled,
+                    onSelect = {
+                        selectedStt = model.id
+                        AppSettings.setSpeechToTextModel(context, model.id)
+                    },
+                    onDownload = {
+                        selectedStt = model.id
+                        AppSettings.setSpeechToTextModel(context, model.id)
+                        speechManager.download(model)
+                    },
+                    onDelete = { deleteSpeechModel(model) },
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text("Reading voice", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(10.dp))
+            SpeechModels.all.filter { it.kind == SpeechModelKind.TEXT_TO_SPEECH }.forEach { model ->
+                SpeechModelRow(
+                    model = model,
+                    selected = selectedTts == model.id,
+                    state = speechStates[model.id] ?: SpeechModelDownload.NotInstalled,
+                    onSelect = {
+                        selectedTts = model.id
+                        AppSettings.setTextToSpeechModel(context, model.id)
+                    },
+                    onDownload = {
+                        selectedTts = model.id
+                        AppSettings.setTextToSpeechModel(context, model.id)
+                        speechManager.download(model)
+                    },
+                    onDelete = { deleteSpeechModel(model) },
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Read new replies aloud", color = SettingsInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(3.dp))
+                    Text("Off by default to save battery.", color = SettingsMuted, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = autoSpeak,
+                    onCheckedChange = {
+                        autoSpeak = it
+                        AppSettings.setSpeakAssistantResponses(context, it)
+                    },
                 )
             }
 
@@ -459,6 +563,95 @@ private fun ThemeChoice(
         icon(if (selected) SettingsAccent else foreground)
         Spacer(Modifier.width(6.dp))
         Text(label, color = foreground, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+    }
+}
+
+@Composable
+private fun SpeechModelRow(
+    model: SpeechModel,
+    selected: Boolean,
+    state: SpeechModelDownload,
+    onSelect: () -> Unit,
+    onDownload: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val downloading = state as? SpeechModelDownload.Downloading
+    val availability = when (state) {
+        SpeechModelDownload.Installed -> "installed"
+        SpeechModelDownload.NotInstalled -> "not installed"
+        is SpeechModelDownload.Downloading -> "downloading"
+        is SpeechModelDownload.Failed -> "download failed"
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(if (selected) androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer else Color.Transparent, RoundedCornerShape(16.dp))
+            .border(1.dp, if (selected) SettingsAccent else SettingsLine, RoundedCornerShape(16.dp))
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .semantics {
+                stateDescription = buildString {
+                    append(if (selected) "Selected, " else "Not selected, ")
+                    append(availability)
+                }
+            }
+            .padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(40.dp).background(SettingsSoftSurface, RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.GraphicEq, contentDescription = null, tint = SettingsAccent, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(model.name, color = SettingsInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "${model.language} · ${formatModelBytes(model.downloadBytes)} download",
+                    color = SettingsMuted,
+                    fontSize = 12.sp,
+                )
+            }
+            when (state) {
+                SpeechModelDownload.Installed -> IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove ${model.name}", tint = SettingsMuted)
+                }
+                SpeechModelDownload.NotInstalled, is SpeechModelDownload.Failed -> IconButton(
+                    onClick = onDownload,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(Icons.Rounded.Download, contentDescription = "Download ${model.name}", tint = SettingsAccent)
+                }
+                is SpeechModelDownload.Downloading -> CircularProgressIndicator(
+                    progress = { (state.bytesRead.toFloat() / state.totalBytes.coerceAtLeast(1)).coerceIn(0f, 1f) },
+                    modifier = Modifier.size(24.dp).padding(end = 2.dp),
+                    color = SettingsAccent,
+                    strokeWidth = 2.dp,
+                )
+            }
+        }
+        Spacer(Modifier.height(7.dp))
+        Text(model.description, color = SettingsMuted, fontSize = 12.sp, lineHeight = 17.sp)
+        if (downloading != null) {
+            Spacer(Modifier.height(10.dp))
+            LinearProgressIndicator(
+                progress = { (downloading.bytesRead.toFloat() / downloading.totalBytes.coerceAtLeast(1)).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(3.dp),
+                color = SettingsAccent,
+                trackColor = SettingsLine,
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                "${formatModelBytes(downloading.bytesRead)} of ${formatModelBytes(downloading.totalBytes)}",
+                color = SettingsMuted,
+                fontSize = 11.sp,
+            )
+        }
+        if (state is SpeechModelDownload.Failed) {
+            Spacer(Modifier.height(7.dp))
+            Text(state.detail, color = androidx.compose.material3.MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        }
     }
 }
 

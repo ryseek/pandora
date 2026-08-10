@@ -20,6 +20,7 @@ This milestone includes:
 - a PRoot-compatible Codex full-access default, avoiding unsupported Bubblewrap/user-namespace sandboxing;
 - live Codex allowance on Home through the official app-server rate-limit API, with tap-to-refresh and offline/sign-in states;
 - durable native Codex chat threads using `thread/list`, `thread/start`, `thread/resume`, and `turn/start`, with streamed agent messages, model selection, and full local workspace tools;
+- private on-device dictation and response reading through Sherpa-ONNX, with lazy-loaded engines and downloadable compact/balanced model choices;
 - directory-based projects that group chats by Codex working directory, with existing-folder, new-folder, and Git-clone creation flows;
 - a Settings helper that opens Codex browser login and keeps the OAuth exchange active in the background;
 - versioned workspace backup and staged restore from Settings, including projects, configuration, credentials, executable bits, and symlinks;
@@ -62,6 +63,8 @@ Codex runs with `sandbox_mode = "danger-full-access"` because Android's PRoot en
 Pandora also installs global Codex guidance at `/root/.codex/AGENTS.md` from the APK on first setup. These instructions give every chat and project basic context about Android, Alpine, PRoot, persistent storage, Repair behavior, and runtime limitations. An existing file is left untouched so users can customize or replace the guidance, while project-level `AGENTS.md` files can add more specific instructions.
 
 Workspace backups are portable ZIP files containing the complete persistent `/root`. They therefore contain sensitive Codex and GitHub sessions and should be stored accordingly. Restore validates and extracts into staging before atomically replacing the current workspace.
+
+Speech models are not bundled in the APK. Choose and download them from Settings → Voice. Downloads are stored in Pandora's private app storage, inference does not use the network, and each recognizer or voice engine is released after use to keep memory pressure low on older phones.
 
 ## License
 

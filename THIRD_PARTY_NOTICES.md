@@ -32,3 +32,16 @@ Apache-2.0.
 
 - Documentation: https://learn.chatgpt.com/docs/codex/cli
 - Source: https://github.com/openai/codex
+
+## sherpa-onnx
+
+Pandora uses the sherpa-onnx Android runtime for offline speech recognition and speech synthesis. The runtime and downloadable model metadata are distributed under Apache-2.0; individual model cards remain authoritative for model-specific terms.
+
+- Source: https://github.com/k2-fsa/sherpa-onnx
+- Models: https://github.com/k2-fsa/sherpa-onnx/releases
+
+## Apache Commons Compress
+
+Pandora uses Apache Commons Compress to safely unpack user-selected speech model archives. It is distributed under Apache-2.0.
+
+- Source: https://commons.apache.org/proper/commons-compress/
