@@ -1,0 +1,314 @@
+package com.pandora.mobile.linux
+
+import android.content.Context
+import android.system.Os
+import android.util.Log
+import java.io.File
+import java.io.InputStream
+import java.nio.charset.StandardCharsets
+
+class RootfsInstaller(private val context: Context) {
+    val rootfs = File(context.filesDir, "alpine-rootfs")
+    val workspace = File(context.filesDir, "linux-workspace")
+    val proot = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+    val nativeLibDir = File(context.applicationInfo.nativeLibraryDir)
+    val tempDir = File(context.cacheDir, "proot-tmp")
+    private val marker = File(rootfs, ".pandora-rootfs-v1")
+    private val defaultPackagesMarker = File(rootfs, ".pandora-default-packages-v2")
+    private val workspaceMarker = File(context.filesDir, ".pandora-workspace-v1")
+
+    fun installIfNeeded(onStatus: (String) -> Unit) {
+        tempDir.mkdirs()
+        ensurePersistentWorkspace(onStatus)
+        ensureCodexDefaults()
+        check(proot.exists()) { "Bundled PRoot runtime is missing" }
+
+        if (!marker.exists()) {
+            onStatus("Installing Alpine Linux…")
+            installFreshRootfs()
+        }
+        installDefaultPackages(onStatus)
+        installCodexIfNeeded(onStatus)
+        onStatus("Starting container…")
+    }
+
+    /** Replaces the Linux system image while leaving the separately-mounted /root intact. */
+    fun repair(onStatus: (String) -> Unit) {
+        tempDir.mkdirs()
+        ensurePersistentWorkspace(onStatus)
+        ensureCodexDefaults()
+        check(proot.exists()) { "Bundled PRoot runtime is missing" }
+        onStatus("Repairing Alpine Linux…")
+        installFreshRootfs()
+        installDefaultPackages(onStatus)
+        installCodexIfNeeded(onStatus)
+        onStatus("Repair complete")
+    }
+
+    private fun installFreshRootfs() {
+        if (rootfs.exists()) rootfs.deleteRecursively()
+        rootfs.mkdirs()
+        context.assets.open("alpine-minirootfs.tar").use { input ->
+            extractTar(input, rootfs)
+        }
+
+        File(rootfs, "root").mkdirs()
+        File(rootfs, "tmp").apply {
+            mkdirs()
+            setReadable(true, false)
+            setWritable(true, false)
+            setExecutable(true, false)
+        }
+        File(rootfs, "etc/resolv.conf").writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+        marker.writeText("aarch64\n")
+    }
+
+    /** Applies the same baseline after first install and every system repair. */
+    private fun installDefaultPackages(onStatus: (String) -> Unit) {
+        if (defaultPackagesMarker.exists()) return
+        onStatus("Installing SSL and Linux utilities…")
+
+        val command = mutableListOf(
+            proot.absolutePath,
+            "-0",
+            "--link2symlink",
+            "-r", rootfs.absolutePath,
+            "-b", "/dev",
+            "-b", "/proc",
+            "-b", "/sys",
+            "-b", "${workspace.absolutePath}:/root",
+            "-w", "/root",
+            "/sbin/apk", "add", "--no-cache",
+        ).apply { addAll(DEFAULT_PACKAGES) }
+
+        val process = ProcessBuilder(command).redirectErrorStream(true).apply {
+            environment().apply {
+                put("PROOT_TMP_DIR", tempDir.absolutePath)
+                put("LD_LIBRARY_PATH", nativeLibDir.absolutePath)
+                put("PROOT_LOADER", File(nativeLibDir, "libproot-loader.so").absolutePath)
+                put("PROOT_LOADER_32", File(nativeLibDir, "libproot-loader32.so").absolutePath)
+                put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+                put("HOME", "/root")
+                put("TERM", "dumb")
+            }
+        }.start()
+
+        val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+        val exitCode = process.waitFor()
+        if (exitCode == 0) {
+            defaultPackagesMarker.writeText(DEFAULT_PACKAGES.joinToString("\n", postfix = "\n"))
+        } else {
+            // An offline first launch should still reach a shell. With no marker,
+            // the exact same manifest is retried automatically on the next launch.
+            Log.w(TAG, "Default package install deferred (exit $exitCode): $output")
+            onStatus("Utilities pending; starting offline…")
+        }
+    }
+
+    /** Installs Codex into persistent /root storage once Node/npm are available. */
+    private fun installCodexIfNeeded(onStatus: (String) -> Unit) {
+        val codex = File(workspace, ".local/bin/codex")
+        if (codex.exists()) {
+            ensureLocalBinOnPath()
+            return
+        }
+        if (!File(rootfs, "usr/bin/npm").exists()) return
+
+        onStatus("Installing Codex…")
+        ensureLocalBinOnPath()
+        val command = containerCommand(
+            "/usr/bin/npm",
+            "install",
+            "--global",
+            "--prefix", "/root/.local",
+            "@openai/codex",
+        )
+        val (exitCode, output) = runContainerCommand(command)
+        if (exitCode != 0 || !codex.exists()) {
+            // Codex remains absent rather than blocking offline startup. Its
+            // existence check retries the install on the next container launch.
+            Log.w(TAG, "Codex install deferred (exit $exitCode): $output")
+            onStatus("Codex pending; starting offline…")
+        }
+    }
+
+    private fun ensureLocalBinOnPath() {
+        val profile = File(workspace, ".profile")
+        val export = "export PATH=\"\$HOME/.local/bin:\$PATH\""
+        val current = profile.takeIf { it.exists() }?.readText().orEmpty()
+        if (!current.lineSequence().any { it.trim() == export }) {
+            profile.parentFile?.mkdirs()
+            profile.appendText((if (current.isNotEmpty() && !current.endsWith('\n')) "\n" else "") + export + "\n")
+        }
+    }
+
+    /** Android/PRoot has no desktop keyring, so Codex credentials must use its private file store. */
+    private fun ensureCodexDefaults() {
+        val config = File(workspace, ".codex/config.toml")
+        val current = config.takeIf { it.exists() }?.readText().orEmpty()
+        if (current.lineSequence().none { it.trimStart().startsWith("cli_auth_credentials_store") }) {
+            config.parentFile?.mkdirs()
+            val separator = if (current.isNotEmpty() && !current.endsWith('\n')) "\n" else ""
+            config.appendText(separator + "cli_auth_credentials_store = \"file\"\n")
+        }
+    }
+
+    private fun containerCommand(vararg executableAndArgs: String): List<String> = listOf(
+        proot.absolutePath,
+        "-0",
+        "--link2symlink",
+        "-r", rootfs.absolutePath,
+        "-b", "/dev",
+        "-b", "/proc",
+        "-b", "/sys",
+        "-b", "${workspace.absolutePath}:/root",
+        "-w", "/root",
+        *executableAndArgs,
+    )
+
+    private fun runContainerCommand(command: List<String>): Pair<Int, String> {
+        val process = ProcessBuilder(command).redirectErrorStream(true).apply {
+            environment().apply {
+                put("PROOT_TMP_DIR", tempDir.absolutePath)
+                put("LD_LIBRARY_PATH", nativeLibDir.absolutePath)
+                put("PROOT_LOADER", File(nativeLibDir, "libproot-loader.so").absolutePath)
+                put("PROOT_LOADER_32", File(nativeLibDir, "libproot-loader32.so").absolutePath)
+                put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+                put("HOME", "/root")
+                put("TERM", "dumb")
+            }
+        }.start()
+        val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+        return process.waitFor() to output
+    }
+
+    /** One-time migration from the original monolithic rootfs into durable user storage. */
+    private fun ensurePersistentWorkspace(onStatus: (String) -> Unit) {
+        if (workspaceMarker.exists()) {
+            workspace.mkdirs()
+            return
+        }
+
+        onStatus("Preserving workspace…")
+        workspace.mkdirs()
+        val oldHome = File(rootfs, "root")
+        if (oldHome.isDirectory) {
+            oldHome.listFiles().orEmpty().forEach { source ->
+                val destination = File(workspace, source.name)
+                if (!destination.exists()) {
+                    check(source.copyRecursively(destination, overwrite = false)) {
+                        "Could not preserve ${source.name}"
+                    }
+                }
+            }
+        }
+        workspaceMarker.writeText("/root\n")
+    }
+
+    private fun extractTar(input: InputStream, target: File) {
+        val header = ByteArray(512)
+        while (readFully(input, header) == 512 && header.any { it != 0.toByte() }) {
+            val name = string(header, 0, 100)
+            val prefix = string(header, 345, 155)
+            val archivedPath = if (prefix.isEmpty()) name else "$prefix/$name"
+            val relative = archivedPath.removePrefix("./").trimStart('/')
+            val safeTarget = File(target, relative).canonicalFile
+            val targetPath = target.canonicalPath
+            require(safeTarget.path == targetPath || safeTarget.path.startsWith(targetPath + File.separator)) {
+                "Unsafe path in Linux image: $archivedPath"
+            }
+
+            val mode = string(header, 100, 8).trim().toIntOrNull(8) ?: 0
+            val size = string(header, 124, 12).trim().toLongOrNull(8) ?: 0L
+            val type = header[156].toInt().toChar()
+            val linkName = string(header, 157, 100)
+
+            when (type) {
+                '5' -> safeTarget.mkdirs()
+                '2' -> {
+                    safeTarget.parentFile?.mkdirs()
+                    runCatching {
+                        if (safeTarget.exists()) safeTarget.delete()
+                        Os.symlink(linkName, safeTarget.absolutePath)
+                    }
+                }
+                '1' -> {
+                    safeTarget.parentFile?.mkdirs()
+                    val source = File(target, linkName)
+                    if (source.exists()) source.copyTo(safeTarget, overwrite = true)
+                }
+                '0', '\u0000' -> {
+                    safeTarget.parentFile?.mkdirs()
+                    safeTarget.outputStream().use { output ->
+                        copyExactly(input, output::write, size)
+                    }
+                    safeTarget.setReadable(true, false)
+                    safeTarget.setWritable(mode and 0b010_010_010 != 0, true)
+                    if (mode and 0b001_001_001 != 0) safeTarget.setExecutable(true, false)
+                    skipPadding(input, size)
+                    continue
+                }
+            }
+
+            if (size > 0) {
+                skipFully(input, ((size + 511) / 512) * 512)
+            }
+        }
+    }
+
+    private fun copyExactly(input: InputStream, write: (ByteArray, Int, Int) -> Unit, count: Long) {
+        var remaining = count
+        val buffer = ByteArray(16 * 1024)
+        while (remaining > 0) {
+            val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+            check(read >= 0) { "Unexpected end of Linux image" }
+            write(buffer, 0, read)
+            remaining -= read
+        }
+    }
+
+    private fun skipPadding(input: InputStream, size: Long) {
+        val remainder = size % 512
+        if (remainder != 0L) skipFully(input, 512 - remainder)
+    }
+
+    private fun skipFully(input: InputStream, count: Long) {
+        var remaining = count
+        val buffer = ByteArray(8192)
+        while (remaining > 0) {
+            val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+            if (read < 0) return
+            remaining -= read
+        }
+    }
+
+    private fun readFully(input: InputStream, buffer: ByteArray): Int {
+        var offset = 0
+        while (offset < buffer.size) {
+            val read = input.read(buffer, offset, buffer.size - offset)
+            if (read < 0) return offset
+            offset += read
+        }
+        return offset
+    }
+
+    private fun string(buffer: ByteArray, offset: Int, length: Int): String {
+        var end = offset
+        while (end < offset + length && buffer[end] != 0.toByte()) end++
+        return String(buffer, offset, end - offset, StandardCharsets.UTF_8)
+    }
+
+    private companion object {
+        const val TAG = "RootfsInstaller"
+        val DEFAULT_PACKAGES = listOf(
+            "ca-certificates",
+            "ssl_client",
+            "lscpu",
+            "util-linux",
+            "nodejs",
+            "npm",
+            "git",
+            "ripgrep",
+        )
+    }
+}
