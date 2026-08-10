@@ -4,8 +4,8 @@ Pandora is an early Android prototype for a local, persistent AI-agent workspace
 
 This milestone includes:
 
-- a native Jetpack Compose home screen;
-- a disconnected new-chat interface;
+- a native Jetpack Compose workspace combining durable Codex chats and Linux terminals;
+- a streaming chat interface backed by the native Codex app-server agent harness;
 - a real ARM64 Alpine Linux userspace running through PRoot without root;
 - a persistent app-private root filesystem;
 - a real PTY terminal with ANSI color, cursor, scrollback, selection, and interactive programs;
@@ -13,10 +13,12 @@ This milestone includes:
 - a persistent terminal font-size setting with preview;
 - a foreground Linux-session service that keeps the PTY and network alive while Pandora is briefly backgrounded;
 - multiple retained terminal sessions with preserved scrollback, explicit Stop controls, and navigation that leaves processes running;
+- pinned, checksum-verified zmx 0.7.0 for named terminal attach/detach, restored terminal state, and detached-session discovery;
 - reproducible default packages after install and Repair (`ca-certificates`, `ssl_client`, `lscpu`, `util-linux`, `nodejs`, `npm`, `git`, `ripgrep`);
 - a persistent Codex CLI installation under `/root/.local`, preserved across Repair;
 - a PRoot-compatible Codex full-access default, avoiding unsupported Bubblewrap/user-namespace sandboxing;
 - live Codex allowance on Home through the official app-server rate-limit API, with tap-to-refresh and offline/sign-in states;
+- durable native Codex chat threads using `thread/list`, `thread/start`, `thread/resume`, and `turn/start`, with streamed agent messages, model selection, and full local workspace tools;
 - a Settings helper that opens Codex browser login and keeps the OAuth exchange active in the background;
 - versioned workspace backup and staged restore from Settings, including projects, configuration, credentials, executable bits, and symlinks;
 - package installation and network access from the container.

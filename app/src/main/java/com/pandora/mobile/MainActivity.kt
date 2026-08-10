@@ -1,6 +1,7 @@
 package com.pandora.mobile
 
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +40,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -64,8 +69,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pandora.mobile.linux.CodexLimitWindow
 import com.pandora.mobile.linux.CodexLimitsState
+import com.pandora.mobile.linux.ChatMessage
+import com.pandora.mobile.linux.ChatRole
+import com.pandora.mobile.linux.CodexChatSession
+import com.pandora.mobile.linux.CodexChatState
+import com.pandora.mobile.linux.CodexThreadCatalog
+import com.pandora.mobile.linux.CodexThreadSummary
 import com.pandora.mobile.linux.CodexUsageReader
 import com.pandora.mobile.linux.PtyTerminalSession
+import com.pandora.mobile.linux.ZmxSessionCatalog
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -81,7 +93,7 @@ private val Accent = Color(0xFF6D5CE7)
 private val Terminal = Color(0xFF111210)
 private val TerminalText = Color(0xFFD8E4D1)
 
-private enum class Screen { Home, Chat, Sessions, Container, Settings }
+private enum class Screen { Home, Chat, Container, Settings }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -95,6 +107,7 @@ class MainActivity : ComponentActivity() {
 private fun PandoraApp() {
     val context = LocalContext.current.applicationContext as PandoraApplication
     val sessionManager = context.terminalSessions
+    val chatManager = context.chatSessions
     val sessions by sessionManager.sessions.collectAsState()
     val sessionRevision by sessionManager.revision.collectAsState()
     var screen by remember { mutableStateOf(Screen.Home) }
@@ -108,52 +121,53 @@ private fun PandoraApp() {
             ) { target ->
                 when (target) {
                     Screen.Home -> HomeScreen(
-                        onNewChat = { screen = Screen.Chat },
-                        onContainer = { screen = Screen.Sessions },
-                        onSettings = { screen = Screen.Settings },
-                        sessionCount = sessions.size,
-                    )
-                    Screen.Chat -> ChatScreen(onBack = { screen = Screen.Home })
-                    Screen.Sessions -> SessionsScreen(
                         sessions = sessions,
                         revision = sessionRevision,
-                        onBack = { screen = Screen.Home },
-                        onNewSession = {
+                        onNewChat = {
+                            chatManager.create()
+                            screen = Screen.Chat
+                        },
+                        onOpenChat = { threadId ->
+                            chatManager.create(threadId)
+                            screen = Screen.Chat
+                        },
+                        onNewTerminal = {
                             selectedSessionId = sessionManager.create().id
                             screen = Screen.Container
                         },
-                        onOpenSession = {
+                        onOpenTerminal = {
                             selectedSessionId = it.id
                             screen = Screen.Container
                         },
+                        onOpenPersistentTerminal = { name ->
+                            selectedSessionId = sessionManager.attach(name).id
+                            screen = Screen.Container
+                        },
+                        onSettings = { screen = Screen.Settings },
                     )
+                    Screen.Chat -> {
+                        val chat = chatManager.current
+                        if (chat == null) {
+                            LaunchedEffect(Unit) { screen = Screen.Home }
+                        } else {
+                            ChatScreen(session = chat, onBack = { screen = Screen.Home })
+                        }
+                    }
                     Screen.Container -> {
                         val session = sessionManager.find(selectedSessionId)
                         if (session == null) {
-                            SessionsScreen(
-                                sessions = sessions,
-                                revision = sessionRevision,
-                                onBack = { screen = Screen.Home },
-                                onNewSession = {
-                                    selectedSessionId = sessionManager.create().id
-                                    screen = Screen.Container
-                                },
-                                onOpenSession = {
-                                    selectedSessionId = it.id
-                                    screen = Screen.Container
-                                },
-                            )
+                            LaunchedEffect(Unit) { screen = Screen.Home }
                         } else {
                             ContainerScreen(
                                 session = session,
                                 onBack = {
                                     selectedSessionId = null
-                                    screen = Screen.Sessions
+                                    screen = Screen.Home
                                 },
                                 onStop = {
                                     sessionManager.stop(session.id)
                                     selectedSessionId = null
-                                    screen = Screen.Sessions
+                                    screen = Screen.Home
                                 },
                             )
                         }
@@ -177,17 +191,46 @@ private fun PandoraApp() {
 
 @Composable
 private fun HomeScreen(
+    sessions: List<ManagedTerminalSession>,
+    @Suppress("UNUSED_PARAMETER") revision: Long,
     onNewChat: () -> Unit,
-    onContainer: () -> Unit,
+    onOpenChat: (String) -> Unit,
+    onNewTerminal: () -> Unit,
+    onOpenTerminal: (ManagedTerminalSession) -> Unit,
+    onOpenPersistentTerminal: (String) -> Unit,
     onSettings: () -> Unit,
-    sessionCount: Int,
 ) {
     val context = LocalContext.current.applicationContext
     var limitState by remember { mutableStateOf<CodexLimitsState>(CodexLimitsState.Loading) }
     var limitRefresh by remember { mutableStateOf(0) }
-    LaunchedEffect(limitRefresh) {
+    var chats by remember { mutableStateOf<List<CodexThreadSummary>>(emptyList()) }
+    var persistentTerminals by remember { mutableStateOf<List<String>>(emptyList()) }
+    var catalogLoading by remember { mutableStateOf(true) }
+    LaunchedEffect(limitRefresh, sessions.size) {
         limitState = CodexLimitsState.Loading
-        limitState = withContext(Dispatchers.IO) { CodexUsageReader(context).read() }
+        catalogLoading = true
+        val loaded = withContext(Dispatchers.IO) {
+            Triple(
+                CodexUsageReader(context).read(),
+                runCatching { CodexThreadCatalog(context).read() }.getOrDefault(emptyList()),
+                runCatching { ZmxSessionCatalog(context).read() }.getOrDefault(emptyList()),
+            )
+        }
+        limitState = loaded.first
+        chats = loaded.second
+        persistentTerminals = loaded.third
+        catalogLoading = false
+    }
+
+    val entries = remember(chats, sessions, persistentTerminals, revision) {
+        buildList<WorkspaceEntry> {
+            chats.forEach { add(WorkspaceEntry.Chat(it)) }
+            sessions.forEach { add(WorkspaceEntry.TerminalSession(it)) }
+            val attachedNames = sessions.mapTo(mutableSetOf()) { it.persistentSessionName }
+            persistentTerminals.filterNot(attachedNames::contains).forEach {
+                add(WorkspaceEntry.PersistentTerminal(it))
+            }
+        }.sortedByDescending { it.updatedAtMillis }
     }
 
     Column(
@@ -195,16 +238,9 @@ private fun HomeScreen(
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(horizontal = 22.dp, vertical = 18.dp)
+            .padding(horizontal = 18.dp, vertical = 14.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier.size(34.dp).background(Ink, RoundedCornerShape(11.dp)),
-                contentAlignment = Alignment.Center
-            ) { Text("P", color = Color.White, fontWeight = FontWeight.Bold) }
-            Spacer(Modifier.width(11.dp))
-            Text("Pandora", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.weight(1f))
             Box(
                 modifier = Modifier
                     .size(34.dp)
@@ -212,49 +248,161 @@ private fun HomeScreen(
                     .clickable(onClick = onSettings),
                 contentAlignment = Alignment.Center,
             ) { Text("⚙", color = Ink, fontSize = 15.sp) }
-            Spacer(Modifier.width(8.dp))
-            StatusPill()
+            Spacer(Modifier.weight(1f))
+            Text("Pandora", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.weight(1f))
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .background(Ink, CircleShape)
+                    .clickable(onClick = onNewTerminal),
+                contentAlignment = Alignment.Center,
+            ) { Text(">_", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
         }
 
-        Spacer(Modifier.height(54.dp))
-        Text(
-            "What will you build?",
-            color = Ink,
-            fontSize = 34.sp,
-            lineHeight = 39.sp,
-            fontWeight = FontWeight.Medium
-        )
+        Spacer(Modifier.height(18.dp))
+        if (entries.isEmpty()) {
+            Column(
+                Modifier.weight(1f).fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text("✦", color = Accent, fontSize = 25.sp)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    if (catalogLoading) "Loading your workspace…" else "Your workspace is ready",
+                    color = Ink,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text("Chats and terminals will appear here.", color = Muted, fontSize = 13.sp)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                items(entries, key = { it.key }) { entry ->
+                    WorkspaceEntryRow(
+                        entry = entry,
+                        onOpenChat = onOpenChat,
+                        onOpenTerminal = onOpenTerminal,
+                        onOpenPersistentTerminal = onOpenPersistentTerminal,
+                    )
+                }
+            }
+        }
+
         Spacer(Modifier.height(10.dp))
-        Text(
-            "A private workspace that lives on this phone.",
-            color = Muted,
-            fontSize = 16.sp,
-            lineHeight = 23.sp
-        )
-
-        Spacer(Modifier.height(38.dp))
-        ActionCard(
-            symbol = "✦",
-            title = "Start a new chat",
-            subtitle = "Open a clean conversation workspace",
-            primary = true,
-            onClick = onNewChat
-        )
-        Spacer(Modifier.height(13.dp))
-        ActionCard(
-            symbol = ">_",
-            title = "Linux sessions",
-            subtitle = if (sessionCount == 0) {
-                "Alpine Linux · persistent · on-device"
-            } else {
-                "$sessionCount retained session${if (sessionCount == 1) "" else "s"}"
-            },
-            primary = false,
-            onClick = onContainer
-        )
-
-        Spacer(Modifier.weight(1f))
         CodexLimitsFooter(state = limitState, onRefresh = { limitRefresh++ })
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Row(
+                modifier = Modifier
+                    .background(Ink, RoundedCornerShape(24.dp))
+                    .clickable(onClick = onNewChat)
+                    .padding(horizontal = 20.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("✦", color = Color(0xFFBEB3FF), fontSize = 15.sp)
+                Spacer(Modifier.width(9.dp))
+                Text("New chat", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+private sealed interface WorkspaceEntry {
+    val key: String
+    val updatedAtMillis: Long
+
+    data class Chat(val chat: CodexThreadSummary) : WorkspaceEntry {
+        override val key = "chat:${chat.id}"
+        override val updatedAtMillis = chat.updatedAtMillis
+    }
+
+    data class TerminalSession(val session: ManagedTerminalSession) : WorkspaceEntry {
+        override val key = "terminal:${session.id}"
+        override val updatedAtMillis = session.createdAtMillis
+    }
+
+    data class PersistentTerminal(val name: String) : WorkspaceEntry {
+        override val key = "zmx:$name"
+        override val updatedAtMillis = 0L
+    }
+}
+
+@Composable
+private fun WorkspaceEntryRow(
+    entry: WorkspaceEntry,
+    onOpenChat: (String) -> Unit,
+    onOpenTerminal: (ManagedTerminalSession) -> Unit,
+    onOpenPersistentTerminal: (String) -> Unit,
+) {
+    val isChat = entry is WorkspaceEntry.Chat
+    val title = when (entry) {
+        is WorkspaceEntry.Chat -> entry.chat.title
+        is WorkspaceEntry.TerminalSession -> entry.session.title
+        is WorkspaceEntry.PersistentTerminal -> entry.name.removePrefix("pandora-").let { "Terminal $it" }
+    }
+    val subtitle = when (entry) {
+        is WorkspaceEntry.Chat -> entry.chat.preview.ifBlank { "Codex conversation" }
+        is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
+            PtyTerminalSession.State.PREPARING -> "Starting Linux…"
+            PtyTerminalSession.State.RUNNING -> "Linux terminal · running"
+            PtyTerminalSession.State.STOPPED -> "Linux terminal · ended"
+            PtyTerminalSession.State.FAILED -> "Linux terminal · failed"
+        }
+        is WorkspaceEntry.PersistentTerminal -> "Linux terminal · detached · tap to reconnect"
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                when (entry) {
+                    is WorkspaceEntry.Chat -> onOpenChat(entry.chat.id)
+                    is WorkspaceEntry.TerminalSession -> onOpenTerminal(entry.session)
+                    is WorkspaceEntry.PersistentTerminal -> onOpenPersistentTerminal(entry.name)
+                }
+            }
+            .padding(vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(42.dp)
+                .background(if (isChat) Color(0xFFE9E6FA) else Color(0xFFE8F0E8), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                if (isChat) "✦" else ">_",
+                color = if (isChat) Accent else Color(0xFF3A8450),
+                fontSize = if (isChat) 17.sp else 11.sp,
+                fontFamily = if (isChat) FontFamily.Default else FontFamily.Monospace,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Spacer(Modifier.height(3.dp))
+            Text(subtitle, color = Muted, fontSize = 12.sp, maxLines = 1)
+        }
+        if (entry.updatedAtMillis > 0L) {
+            Spacer(Modifier.width(8.dp))
+            Text(formatRelativeTime(entry.updatedAtMillis), color = Color(0xFFA1A29D), fontSize = 11.sp)
+        }
+    }
+}
+
+private fun formatRelativeTime(timestamp: Long): String {
+    val elapsedMinutes = ((System.currentTimeMillis() - timestamp).coerceAtLeast(0L) / 60_000L).toInt()
+    return when {
+        elapsedMinutes < 1 -> "now"
+        elapsedMinutes < 60 -> "${elapsedMinutes}m"
+        elapsedMinutes < 24 * 60 -> "${elapsedMinutes / 60}h"
+        elapsedMinutes < 7 * 24 * 60 -> "${elapsedMinutes / (24 * 60)}d"
+        else -> SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(timestamp))
     }
 }
 
@@ -512,29 +660,113 @@ private fun Header(title: String, detail: String? = null, onBack: () -> Unit, da
 }
 
 @Composable
-private fun ChatScreen(onBack: () -> Unit) {
+private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
     var draft by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().navigationBarsPadding()) {
-        Header("New chat", "Model not connected", onBack)
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
-        Column(
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+    val messages by session.messages.collectAsState()
+    val state by session.state.collectAsState()
+    val models by session.models.collectAsState()
+    val selectedModel by session.selectedModel.collectAsState()
+    var modelMenuOpen by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val ready = state is CodexChatState.Ready
+    val detail = when (val current = state) {
+        is CodexChatState.Starting -> current.detail
+        is CodexChatState.Ready -> current.model
+        is CodexChatState.Running -> "${current.model} · working…"
+        is CodexChatState.Failed -> "Connection failed"
+        CodexChatState.Closed -> "Closed"
+    }
+    fun submit() {
+        if (session.send(draft)) draft = ""
+    }
+    LaunchedEffect(messages.size, messages.lastOrNull()?.text) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    }
+    Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier.size(52.dp).background(Color(0xFFE9E6FA), RoundedCornerShape(17.dp)),
-                contentAlignment = Alignment.Center
-            ) { Text("✦", color = Accent, fontSize = 22.sp) }
-            Spacer(Modifier.height(18.dp))
-            Text("Start with an idea", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Chat transport is intentionally disconnected in this first build.",
-                color = Muted,
-                fontSize = 14.sp,
-                lineHeight = 20.sp
-            )
+                Modifier.size(38.dp).background(Color(0xFFEAEAE5), CircleShape).clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) { Text("←", color = Ink, fontSize = 20.sp) }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Codex chat", color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Box {
+                    Text(
+                        "$detail  ▾",
+                        modifier = Modifier.clickable(enabled = models.isNotEmpty()) { modelMenuOpen = true },
+                        color = if (models.isNotEmpty()) Accent else Muted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                    )
+                    DropdownMenu(expanded = modelMenuOpen, onDismissRequest = { modelMenuOpen = false }) {
+                        models.forEach { option ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            option.displayName,
+                                            color = Ink,
+                                            fontSize = 14.sp,
+                                            fontWeight = if (option.model == selectedModel) FontWeight.Bold else FontWeight.Normal,
+                                        )
+                                        if (option.description.isNotBlank()) {
+                                            Text(option.description, color = Muted, fontSize = 11.sp, maxLines = 2)
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    session.selectModel(option.model)
+                                    modelMenuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            StatusPill()
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+        if (messages.isEmpty()) {
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    Modifier.size(52.dp).background(Color(0xFFE9E6FA), RoundedCornerShape(17.dp)),
+                    contentAlignment = Alignment.Center
+                ) { Text("✦", color = Accent, fontSize = 22.sp) }
+                Spacer(Modifier.height(18.dp))
+                Text("Start with an idea", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    when (state) {
+                        is CodexChatState.Starting -> "Starting the native Codex agent harness…"
+                        is CodexChatState.Failed -> (state as CodexChatState.Failed).detail
+                        else -> "Codex can inspect, run, and edit files in your local workspace."
+                    },
+                    color = Muted,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(messages, key = { it.id }) { message -> ChatMessageRow(message) }
+            }
         }
         Row(
             modifier = Modifier.padding(16.dp).border(1.dp, Line, RoundedCornerShape(19.dp)).padding(14.dp),
@@ -543,19 +775,62 @@ private fun ChatScreen(onBack: () -> Unit) {
             BasicTextField(
                 value = draft,
                 onValueChange = { draft = it },
+                enabled = ready,
                 modifier = Modifier.weight(1f),
                 textStyle = TextStyle(color = Ink, fontSize = 15.sp),
                 cursorBrush = SolidColor(Accent),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { submit() }),
                 decorationBox = { inner ->
-                    if (draft.isEmpty()) Text("Message Pandora…", color = Color(0xFFA2A39E), fontSize = 15.sp)
+                    if (draft.isEmpty()) {
+                        Text(
+                            if (ready) "Message Codex…" else "Codex is not ready…",
+                            color = Color(0xFFA2A39E),
+                            fontSize = 15.sp,
+                        )
+                    }
                     inner()
                 }
             )
             Spacer(Modifier.width(10.dp))
             Box(
-                Modifier.size(38.dp).background(Color(0xFFDADAD4), CircleShape),
+                Modifier
+                    .size(38.dp)
+                    .background(if (ready && draft.isNotBlank()) Accent else Color(0xFFDADAD4), CircleShape)
+                    .clickable(enabled = ready && draft.isNotBlank(), onClick = { submit() }),
                 contentAlignment = Alignment.Center
             ) { Text("↑", color = Color.White, fontSize = 18.sp) }
+        }
+    }
+}
+
+@Composable
+private fun ChatMessageRow(message: ChatMessage) {
+    when (message.role) {
+        ChatRole.SYSTEM -> Text(
+            message.text,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+            color = Color(0xFFD18B27),
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+        )
+        ChatRole.USER, ChatRole.ASSISTANT -> Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (message.role == ChatRole.USER) Arrangement.End else Arrangement.Start,
+        ) {
+            Text(
+                message.text,
+                modifier = Modifier
+                    .fillMaxWidth(0.88f)
+                    .background(
+                        if (message.role == ChatRole.USER) Ink else Color(0xFFECEBE7),
+                        RoundedCornerShape(18.dp),
+                    )
+                    .padding(horizontal = 15.dp, vertical = 12.dp),
+                color = if (message.role == ChatRole.USER) Color.White else Ink,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+            )
         }
     }
 }

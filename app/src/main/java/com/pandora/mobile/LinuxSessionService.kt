@@ -30,8 +30,8 @@ class LinuxSessionService : Service() {
         )
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.app_icon)
-            .setContentTitle("Pandora Linux is running")
-            .setContentText("Tap to return to your terminal")
+            .setContentTitle("Pandora workspace is running")
+            .setContentText("Tap to return to your Codex agent or terminal")
             .setContentIntent(openPandora)
             .setOngoing(true)
             .build()
@@ -45,12 +45,27 @@ class LinuxSessionService : Service() {
         private const val CHANNEL_ID = "linux_session"
         private const val NOTIFICATION_ID = 4102
 
-        fun start(context: Context) {
-            ContextCompat.startForegroundService(context, Intent(context, LinuxSessionService::class.java))
+        @Volatile private var terminalActive = false
+        @Volatile private var chatActive = false
+
+        @Synchronized
+        fun setTerminalActive(context: Context, active: Boolean) {
+            terminalActive = active
+            refresh(context)
         }
 
-        fun stop(context: Context) {
-            context.stopService(Intent(context, LinuxSessionService::class.java))
+        @Synchronized
+        fun setChatActive(context: Context, active: Boolean) {
+            chatActive = active
+            refresh(context)
+        }
+
+        private fun refresh(context: Context) {
+            if (terminalActive || chatActive) {
+                ContextCompat.startForegroundService(context, Intent(context, LinuxSessionService::class.java))
+            } else {
+                context.stopService(Intent(context, LinuxSessionService::class.java))
+            }
         }
     }
 }

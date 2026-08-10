@@ -19,7 +19,10 @@ import kotlinx.coroutines.yield
 import java.io.File
 
 /** A real PTY connected to an interactive shell inside Pandora's PRoot workspace. */
-class PtyTerminalSession(context: Context) {
+class PtyTerminalSession(
+    context: Context,
+    private val persistentSessionName: String? = null,
+) {
     enum class State { PREPARING, RUNNING, STOPPED, FAILED }
 
     private val appContext = context.applicationContext
@@ -120,7 +123,15 @@ class PtyTerminalSession(context: Context) {
         }
     }
 
-    private fun buildCommand() = listOf(
+    private fun buildCommand(): List<String> {
+        val shell = if (
+            persistentSessionName != null && File(installer.workspace, ".local/bin/zmx").isFile
+        ) {
+            listOf("/root/.local/bin/zmx", "attach", persistentSessionName, "/bin/sh", "-l", "-i")
+        } else {
+            listOf("/bin/sh", "-l", "-i")
+        }
+        return listOf(
         installer.proot.absolutePath,
         "-0",
         "--link2symlink",
@@ -130,8 +141,9 @@ class PtyTerminalSession(context: Context) {
         "-b", "/sys",
         "-b", "${installer.workspace.absolutePath}:/root",
         "-w", "/root",
-        "/bin/sh", "-l", "-i",
-    )
+        *shell.toTypedArray(),
+        )
+    }
 
     private fun buildEnvironment(): LinkedHashMap<String, String> = linkedMapOf(
         "PROOT_TMP_DIR" to installer.tempDir.absolutePath,
@@ -140,6 +152,7 @@ class PtyTerminalSession(context: Context) {
         "PROOT_LOADER_32" to File(installer.nativeLibDir, "libproot-loader32.so").absolutePath,
         "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "HOME" to "/root",
+        "ZMX_DIR" to "/root/.local/state/zmx/sessions",
         "TERM" to "xterm-256color",
         "COLORTERM" to "truecolor",
         "LANG" to "C.UTF-8",

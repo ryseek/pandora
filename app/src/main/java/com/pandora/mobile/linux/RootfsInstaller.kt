@@ -5,7 +5,10 @@ import android.system.Os
 import android.util.Log
 import java.io.File
 import java.io.InputStream
+import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.zip.GZIPInputStream
 
 class RootfsInstaller(private val context: Context) {
     val rootfs = File(context.filesDir, "alpine-rootfs")
@@ -29,6 +32,7 @@ class RootfsInstaller(private val context: Context) {
                 installFreshRootfs()
             }
             installDefaultPackages(onStatus)
+            installZmxIfNeeded(onStatus)
             installCodexIfNeeded(onStatus)
             onStatus("Starting container…")
         }
@@ -44,6 +48,7 @@ class RootfsInstaller(private val context: Context) {
             onStatus("Repairing Alpine Linux…")
             installFreshRootfs()
             installDefaultPackages(onStatus)
+            installZmxIfNeeded(onStatus)
             installCodexIfNeeded(onStatus)
             onStatus("Repair complete")
         }
@@ -126,6 +131,40 @@ class RootfsInstaller(private val context: Context) {
         }
     }
 
+    /** Installs a pinned static ARM64 zmx so every Pandora terminal can detach and reattach. */
+    private fun installZmxIfNeeded(onStatus: (String) -> Unit) {
+        val zmx = File(workspace, ".local/bin/zmx")
+        if (zmx.exists()) return
+        onStatus("Installing persistent terminal sessions…")
+        val archive = File(tempDir, "zmx-$ZMX_VERSION.tar.gz")
+        val extraction = File(tempDir, "zmx-$ZMX_VERSION-extract")
+        runCatching {
+            URL(ZMX_URL).openConnection().apply {
+                connectTimeout = 15_000
+                readTimeout = 60_000
+            }.getInputStream().buffered().use { input ->
+                archive.outputStream().buffered().use(input::copyTo)
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
+                .digest(archive.readBytes())
+                .joinToString("") { "%02x".format(it) }
+            check(digest == ZMX_SHA256) { "zmx checksum did not match" }
+            if (extraction.exists()) extraction.deleteRecursively()
+            extraction.mkdirs()
+            GZIPInputStream(archive.inputStream().buffered()).use { input -> extractTar(input, extraction) }
+            val extracted = File(extraction, "zmx")
+            check(extracted.isFile) { "zmx archive did not contain the binary" }
+            zmx.parentFile?.mkdirs()
+            extracted.copyTo(zmx, overwrite = true)
+            check(zmx.setExecutable(true, false)) { "Could not make zmx executable" }
+        }.onFailure { error ->
+            Log.w(TAG, "zmx install deferred", error)
+            onStatus("Persistent terminals pending; starting normally…")
+        }
+        archive.delete()
+        if (extraction.exists()) extraction.deleteRecursively()
+    }
+
     private fun ensureLocalBinOnPath() {
         val profile = File(workspace, ".profile")
         val export = "export PATH=\"\$HOME/.local/bin:\$PATH\""
@@ -204,6 +243,7 @@ class RootfsInstaller(private val context: Context) {
                 put("PROOT_LOADER_32", File(nativeLibDir, "libproot-loader32.so").absolutePath)
                 put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
                 put("HOME", "/root")
+                put("ZMX_DIR", "/root/.local/state/zmx/sessions")
                 put("TERM", "dumb")
             }
         }.start()
@@ -343,5 +383,8 @@ class RootfsInstaller(private val context: Context) {
             "git",
             "ripgrep",
         )
+        const val ZMX_VERSION = "0.7.0"
+        const val ZMX_URL = "https://zmx.sh/a/zmx-0.7.0-linux-aarch64.tar.gz"
+        const val ZMX_SHA256 = "77599f66124694fae80bbb1d2fa0eafdb8c648b427a048cad90513ecf6136fc9"
     }
 }

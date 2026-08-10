@@ -5,7 +5,9 @@ import android.content.Intent
 import android.net.Uri
 import com.openminis.app.ui.terminal.emulator.TerminalEmulator
 import com.pandora.mobile.linux.PtyTerminalSession
+import com.pandora.mobile.linux.RootfsInstaller
 import java.util.UUID
+import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,12 +23,13 @@ class ManagedTerminalSession internal constructor(
     val id: String,
     val title: String,
     val createdAtMillis: Long,
+    val persistentSessionName: String,
     private val initialCommand: String?,
     private val onStateChanged: () -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val pty = PtyTerminalSession(appContext)
+    private val pty = PtyTerminalSession(appContext, persistentSessionName)
     val emulator = TerminalEmulator()
     val state: StateFlow<PtyTerminalSession.State> = pty.state
     private val _status = MutableStateFlow("Preparing Linux…")
@@ -60,9 +63,27 @@ class ManagedTerminalSession internal constructor(
 
     fun resize(columns: Int, rows: Int) = pty.resize(columns, rows)
 
-    fun stop() {
+    fun stop(killPersistent: Boolean = true) {
         pty.stop()
         scope.cancel()
+        if (killPersistent) {
+            thread(name = "zmx-kill-$persistentSessionName", isDaemon = true) {
+                runCatching {
+                    val installer = RootfsInstaller(appContext)
+                    val process = installer.startContainerProcess(
+                        installer.containerCommand(
+                            "/root/.local/bin/zmx",
+                            "kill",
+                            persistentSessionName,
+                            "--force",
+                        ),
+                        mergeError = true,
+                    )
+                    process.inputStream.close()
+                    process.waitFor()
+                }
+            }
+        }
     }
 
     private fun inspectLoginOutput(bytes: ByteArray) {
@@ -91,13 +112,22 @@ class TerminalSessionManager(private val context: Context) {
     val revision: StateFlow<Long> = _revision.asStateFlow()
     private var nextSessionNumber = 1
 
-    fun create(initialCommand: String? = null): ManagedTerminalSession {
+    fun create(
+        initialCommand: String? = null,
+        persistentSessionName: String? = null,
+    ): ManagedTerminalSession {
+        val sessionName = persistentSessionName ?: "pandora-${UUID.randomUUID().toString().take(8)}"
         lateinit var managed: ManagedTerminalSession
         managed = ManagedTerminalSession(
             context = context,
             id = UUID.randomUUID().toString(),
-            title = "Linux session ${nextSessionNumber++}",
+            title = if (persistentSessionName == null) {
+                "Linux session ${nextSessionNumber++}"
+            } else {
+                persistentSessionName.removePrefix("pandora-").let { "Terminal $it" }
+            },
             createdAtMillis = System.currentTimeMillis(),
+            persistentSessionName = sessionName,
             initialCommand = initialCommand,
             onStateChanged = ::refreshForegroundService,
         )
@@ -105,6 +135,10 @@ class TerminalSessionManager(private val context: Context) {
         refreshForegroundService()
         return managed
     }
+
+    fun attach(persistentSessionName: String): ManagedTerminalSession =
+        _sessions.value.firstOrNull { it.persistentSessionName == persistentSessionName }
+            ?: create(persistentSessionName = persistentSessionName)
 
     fun find(id: String?): ManagedTerminalSession? = _sessions.value.firstOrNull { it.id == id }
 
@@ -128,6 +162,6 @@ class TerminalSessionManager(private val context: Context) {
             it.state.value == PtyTerminalSession.State.PREPARING ||
                 it.state.value == PtyTerminalSession.State.RUNNING
         }
-        if (running) LinuxSessionService.start(context) else LinuxSessionService.stop(context)
+        LinuxSessionService.setTerminalActive(context, running)
     }
 }
