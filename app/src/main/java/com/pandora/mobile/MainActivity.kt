@@ -82,6 +82,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -201,24 +203,26 @@ private fun HomeScreen(
     onSettings: () -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
+    val chatCatalog = remember(context) { CodexThreadCatalog(context) }
     var limitState by remember { mutableStateOf<CodexLimitsState>(CodexLimitsState.Loading) }
     var limitRefresh by remember { mutableStateOf(0) }
-    var chats by remember { mutableStateOf<List<CodexThreadSummary>>(emptyList()) }
+    var chats by remember(chatCatalog) { mutableStateOf(chatCatalog.readCached()) }
     var persistentTerminals by remember { mutableStateOf<List<String>>(emptyList()) }
-    var catalogLoading by remember { mutableStateOf(true) }
+    var catalogLoading by remember { mutableStateOf(chats.isEmpty()) }
     LaunchedEffect(limitRefresh, sessions.size) {
         limitState = CodexLimitsState.Loading
-        catalogLoading = true
+        catalogLoading = chats.isEmpty()
         val loaded = withContext(Dispatchers.IO) {
-            Triple(
-                CodexUsageReader(context).read(),
-                runCatching { CodexThreadCatalog(context).read() }.getOrDefault(emptyList()),
-                runCatching { ZmxSessionCatalog(context).read() }.getOrDefault(emptyList()),
-            )
+            coroutineScope {
+                val usage = async { CodexUsageReader(context).read() }
+                val chatThreads = async { runCatching { chatCatalog.read() }.getOrNull() }
+                val terminals = async { runCatching { ZmxSessionCatalog(context).read() }.getOrNull() }
+                Triple(usage.await(), chatThreads.await(), terminals.await())
+            }
         }
         limitState = loaded.first
-        chats = loaded.second
-        persistentTerminals = loaded.third
+        loaded.second?.let { chats = it }
+        loaded.third?.let { persistentTerminals = it }
         catalogLoading = false
     }
 

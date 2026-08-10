@@ -1,9 +1,11 @@
 package com.pandora.mobile.linux
 
 import android.content.Context
+import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import org.json.JSONArray
 import org.json.JSONObject
 
 data class CodexThreadSummary(
@@ -17,6 +19,26 @@ data class CodexThreadSummary(
 class CodexThreadCatalog(context: Context) {
     private val installer = RootfsInstaller(context.applicationContext)
     private val registry = PandoraChatRegistry(context.applicationContext)
+    private val cache = File(installer.workspace, ".pandora/chat-list-cache.json")
+
+    fun readCached(): List<CodexThreadSummary> = synchronized(CACHE_LOCK) {
+        runCatching {
+            val data = JSONArray(cache.readText())
+            buildList {
+                for (index in 0 until data.length()) {
+                    val item = data.getJSONObject(index)
+                    add(
+                        CodexThreadSummary(
+                            id = item.getString("id"),
+                            title = item.getString("title"),
+                            preview = item.optString("preview"),
+                            updatedAtMillis = item.getLong("updatedAtMillis"),
+                        ),
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
 
     fun read(): List<CodexThreadSummary> {
         installer.installIfNeeded { }
@@ -72,7 +94,7 @@ class CodexThreadCatalog(context: Context) {
                 }
                 val data = response.getJSONObject("result").getJSONArray("data")
                 val registeredIds = registry.read()
-                return buildList {
+                val threads = buildList {
                     for (index in 0 until data.length()) {
                         val item = data.optJSONObject(index) ?: continue
                         val id = item.optString("id")
@@ -93,11 +115,35 @@ class CodexThreadCatalog(context: Context) {
                         )
                     }
                 }
+                writeCache(threads)
+                return threads
             }
         } finally {
             process.destroyForcibly()
             executor.shutdownNow()
             runCatching { stderrDrainer.join(500) }
         }
+    }
+
+    private fun writeCache(threads: List<CodexThreadSummary>) = synchronized(CACHE_LOCK) {
+        val data = JSONArray()
+        threads.forEach { thread ->
+            data.put(
+                JSONObject()
+                    .put("id", thread.id)
+                    .put("title", thread.title)
+                    .put("preview", thread.preview)
+                    .put("updatedAtMillis", thread.updatedAtMillis),
+            )
+        }
+        cache.parentFile?.mkdirs()
+        val temporary = File(cache.parentFile, "${cache.name}.tmp")
+        temporary.writeText(data.toString())
+        if (!temporary.renameTo(cache)) temporary.copyTo(cache, overwrite = true)
+        temporary.delete()
+    }
+
+    private companion object {
+        val CACHE_LOCK = Any()
     }
 }
