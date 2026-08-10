@@ -23,8 +23,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.SettingsBrightness
+import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -55,13 +61,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val SettingsInk = Color(0xFF20211F)
-private val SettingsMuted = Color(0xFF73756E)
-private val SettingsLine = Color(0xFFE3E3DD)
-private val SettingsAccent = Color(0xFF6D5CE7)
+private val SettingsInk: Color @Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.onBackground
+private val SettingsMuted: Color @Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+private val SettingsLine: Color @Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.outlineVariant
+private val SettingsAccent: Color @Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.primary
+private val SettingsSoftSurface: Color @Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
 
 @Composable
 fun SettingsScreen(
+    themePreference: AppSettings.ThemePreference,
+    onThemePreferenceChanged: (AppSettings.ThemePreference) -> Unit,
     onBack: () -> Unit,
     onCodexLogin: () -> Unit,
     onStopAllForRepair: () -> Unit,
@@ -125,9 +134,16 @@ fun SettingsScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier.size(38.dp).background(Color(0xFFEAEAE5), CircleShape).clickable(onClick = onBack),
+                Modifier.size(38.dp).background(SettingsSoftSurface, CircleShape).clickable(onClick = onBack),
                 contentAlignment = Alignment.Center,
-            ) { Text("←", color = SettingsInk, fontSize = 20.sp) }
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "Back",
+                    tint = SettingsInk,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
             Spacer(Modifier.width(12.dp))
             Text("Settings", color = SettingsInk, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         }
@@ -135,6 +151,40 @@ fun SettingsScreen(
         Box(Modifier.fillMaxWidth().height(1.dp).background(SettingsLine))
 
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(22.dp)) {
+            Text("APPEARANCE", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(14.dp))
+            Text("Theme", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text("Follow the device or choose a look for Pandora.", color = SettingsMuted, fontSize = 13.sp)
+            Spacer(Modifier.height(14.dp))
+            Row(
+                Modifier.fillMaxWidth().background(SettingsSoftSurface, RoundedCornerShape(14.dp)).padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ThemeChoice(
+                    label = "System",
+                    selected = themePreference == AppSettings.ThemePreference.SYSTEM,
+                    icon = { tint -> Icon(Icons.Rounded.SettingsBrightness, null, tint = tint, modifier = Modifier.size(17.dp)) },
+                    modifier = Modifier.weight(1f),
+                    onClick = { onThemePreferenceChanged(AppSettings.ThemePreference.SYSTEM) },
+                )
+                ThemeChoice(
+                    label = "Light",
+                    selected = themePreference == AppSettings.ThemePreference.LIGHT,
+                    icon = { tint -> Icon(Icons.Rounded.WbSunny, null, tint = tint, modifier = Modifier.size(17.dp)) },
+                    modifier = Modifier.weight(1f),
+                    onClick = { onThemePreferenceChanged(AppSettings.ThemePreference.LIGHT) },
+                )
+                ThemeChoice(
+                    label = "Dark",
+                    selected = themePreference == AppSettings.ThemePreference.DARK,
+                    icon = { tint -> Icon(Icons.Rounded.DarkMode, null, tint = tint, modifier = Modifier.size(17.dp)) },
+                    modifier = Modifier.weight(1f),
+                    onClick = { onThemePreferenceChanged(AppSettings.ThemePreference.DARK) },
+                )
+            }
+
+            Spacer(Modifier.height(30.dp))
             Text("TERMINAL", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -389,6 +439,30 @@ fun SettingsScreen(
 }
 
 @Composable
+private fun ThemeChoice(
+    label: String,
+    selected: Boolean,
+    icon: @Composable (Color) -> Unit,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val background = if (selected) androidx.compose.material3.MaterialTheme.colorScheme.background else Color.Transparent
+    val foreground = if (selected) SettingsInk else SettingsMuted
+    Row(
+        modifier = modifier
+            .background(background, RoundedCornerShape(11.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon(if (selected) SettingsAccent else foreground)
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = foreground, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+    }
+}
+
+@Composable
 private fun BackupAction(
     title: String,
     subtitle: String,
@@ -405,7 +479,7 @@ private fun BackupAction(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(42.dp).background(Color(0xFFEDEAE5), RoundedCornerShape(13.dp)),
+            Modifier.size(42.dp).background(SettingsSoftSurface, RoundedCornerShape(13.dp)),
             contentAlignment = Alignment.Center,
         ) { Text(symbol, color = SettingsAccent, fontSize = 19.sp, fontWeight = FontWeight.Bold) }
         Spacer(Modifier.width(13.dp))

@@ -86,7 +86,7 @@ class CodexUsageReader(context: Context) {
                 )
             }
         } finally {
-            process.destroyForcibly()
+            installer.terminateProcessTree(process)
             executor.shutdownNow()
             runCatching { stderrDrainer.join(500) }
         }

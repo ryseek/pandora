@@ -18,7 +18,7 @@ class ZmxSessionCatalog(context: Context) {
             if (!process.waitFor(10, TimeUnit.SECONDS) || process.exitValue() != 0) emptyList()
             else process.inputStream.bufferedReader().readLines().map(String::trim).filter(String::isNotBlank)
         } finally {
-            if (process.isAlive) process.destroyForcibly()
+            if (process.isAlive) installer.terminateProcessTree(process)
         }
     }
 }

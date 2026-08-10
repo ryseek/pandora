@@ -18,9 +18,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -52,6 +57,7 @@ fun TerminalScreen(
     session: ManagedTerminalSession,
     onBack: () -> Unit,
     onStop: () -> Unit,
+    onRestart: () -> Unit,
 ) {
     val context = LocalContext.current
     val emulator = session.emulator
@@ -59,11 +65,12 @@ fun TerminalScreen(
     val input = rememberTerminalInputController()
     val sessionState by session.state.collectAsState()
     val status by session.status.collectAsState()
+    val readOnly = sessionState == PtyTerminalSession.State.STOPPED || sessionState == PtyTerminalSession.State.FAILED
     var ctrlActive by remember { mutableStateOf(false) }
     var altActive by remember { mutableStateOf(false) }
     var showStop by remember { mutableStateOf(false) }
     fun send(bytes: ByteArray) {
-        if (bytes.isEmpty()) return
+        if (bytes.isEmpty() || readOnly) return
         emulator.scrollOffset = 0
         var outgoing = bytes
         if (ctrlActive && bytes.size == 1) {
@@ -83,6 +90,10 @@ fun TerminalScreen(
         onBack()
     }
 
+    androidx.compose.runtime.LaunchedEffect(readOnly) {
+        if (readOnly) input.clearFocus()
+    }
+
     Box(Modifier.fillMaxSize().background(TerminalBackground)) {
         Column(
             modifier = Modifier
@@ -100,26 +111,54 @@ fun TerminalScreen(
                         emulator.resize(columns, rows)
                         session.resize(columns, rows)
                     },
-                    onTap = { input.requestFocus() },
+                    onTap = { if (!readOnly) input.requestFocus() },
                 )
-                TerminalInputView(
-                    onInput = ::send,
-                    applicationCursorKeys = emulator.applicationCursorKeys,
-                    controller = input,
-                    modifier = Modifier.size(1.dp),
-                )
+                if (!readOnly) {
+                    TerminalInputView(
+                        onInput = ::send,
+                        applicationCursorKeys = emulator.applicationCursorKeys,
+                        controller = input,
+                        modifier = Modifier.size(1.dp),
+                    )
+                }
                 if (sessionState == PtyTerminalSession.State.PREPARING) {
                     Column(
-                        Modifier.align(Alignment.Center),
-                        horizontalAlignment = Alignment.CenterHorizontally,
+                        Modifier
+                            .align(Alignment.Center)
+                            .fillMaxWidth()
+                            .padding(horizontal = 34.dp),
+                        horizontalAlignment = Alignment.Start,
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(26.dp),
-                            color = Color(0xFF9E90FF),
-                            strokeWidth = 2.dp,
+                        Text(
+                            "Preparing your local workspace",
+                            color = Color(0xFFE6E8E2),
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.SemiBold,
                         )
-                        Spacer(Modifier.height(12.dp))
-                        Text(status, color = Color(0xFF8C8F88), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Pandora is installing a private Linux environment on this device.",
+                            color = Color(0xFF9A9D95),
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp,
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        LinearProgressIndicator(
+                            progress = { installProgress(status) },
+                            modifier = Modifier.fillMaxWidth().height(5.dp),
+                            color = Color(0xFF9E90FF),
+                            trackColor = Color(0xFF292C27),
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = Color(0xFF9E90FF),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.size(9.dp))
+                            Text(status, color = Color(0xFFB6B9B1), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        }
                     }
                 }
             }
@@ -133,6 +172,7 @@ fun TerminalScreen(
                 input.clearFocus()
                 onBack()
             },
+            readOnly = readOnly,
             onStop = { showStop = true },
             onClear = {
                 send(byteArrayOf(0x15))
@@ -140,23 +180,32 @@ fun TerminalScreen(
             },
         )
 
-        TerminalAccessoryRow(
-            ctrlActive = ctrlActive,
-            altActive = altActive,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .imePadding()
-                .windowInsetsPadding(WindowInsets.navigationBars),
-            onCtrl = { ctrlActive = !ctrlActive },
-            onAlt = { altActive = !altActive },
-            send = ::send,
-            sendArrow = { direction ->
-                val prefix = if (emulator.applicationCursorKeys) "\u001BO" else "\u001B["
-                send((prefix + direction).toByteArray())
-            },
-        )
+        if (readOnly) {
+            StoppedTranscriptBar(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.navigationBars),
+                onRestart = onRestart,
+            )
+        } else {
+            TerminalAccessoryRow(
+                ctrlActive = ctrlActive,
+                altActive = altActive,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .imePadding()
+                    .windowInsetsPadding(WindowInsets.navigationBars),
+                onCtrl = { ctrlActive = !ctrlActive },
+                onAlt = { altActive = !altActive },
+                send = ::send,
+                sendArrow = { direction ->
+                    val prefix = if (emulator.applicationCursorKeys) "\u001BO" else "\u001B["
+                    send((prefix + direction).toByteArray())
+                },
+            )
+        }
 
-        if (showStop) {
+        if (showStop && !readOnly) {
             AlertDialog(
                 onDismissRequest = { showStop = false },
                 title = { Text("Stop this Linux session?") },
@@ -176,9 +225,20 @@ fun TerminalScreen(
     }
 }
 
+private fun installProgress(status: String): Float = when {
+    status.contains("workspace", ignoreCase = true) -> 0.12f
+    status.contains("Alpine", ignoreCase = true) -> 0.28f
+    status.contains("SSL", ignoreCase = true) || status.contains("utilities", ignoreCase = true) -> 0.48f
+    status.contains("terminal", ignoreCase = true) -> 0.66f
+    status.contains("Codex", ignoreCase = true) -> 0.84f
+    status.contains("container", ignoreCase = true) -> 0.96f
+    else -> 0.08f
+}
+
 @Composable
 private fun TerminalTopBar(
     modifier: Modifier,
+    readOnly: Boolean,
     onBack: () -> Unit,
     onStop: () -> Unit,
     onClear: () -> Unit,
@@ -207,23 +267,58 @@ private fun TerminalTopBar(
             modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(width = 58.dp, height = 34.dp)
-                    .background(Color(0xFF7D2424), RoundedCornerShape(7.dp))
-                    .clickable(onClick = onStop),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("■ stop", color = Color(0xFFFFDADA), fontSize = 10.sp, fontFamily = FontFamily.Monospace, maxLines = 1)
+            if (readOnly) {
+                Box(Modifier.size(7.dp).background(Color(0xFF777B73), androidx.compose.foundation.shape.CircleShape))
+                Spacer(Modifier.size(7.dp))
+                Text("stopped", color = Color(0xFF9A9D95), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(width = 58.dp, height = 34.dp)
+                        .background(Color(0xFF7D2424), RoundedCornerShape(7.dp))
+                        .clickable(onClick = onStop),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("■ stop", color = Color(0xFFFFDADA), fontSize = 10.sp, fontFamily = FontFamily.Monospace, maxLines = 1)
+                }
+                Text(
+                    "clear",
+                    modifier = Modifier.clickable(onClick = onClear).padding(horizontal = 8.dp, vertical = 8.dp),
+                    color = Color(0xFF9E90FF),
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                )
             }
-            Text(
-                "clear",
-                modifier = Modifier.clickable(onClick = onClear).padding(horizontal = 8.dp, vertical = 8.dp),
-                color = Color(0xFF9E90FF),
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-            )
+        }
+    }
+}
+
+@Composable
+private fun StoppedTranscriptBar(modifier: Modifier = Modifier, onRestart: () -> Unit) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(46.dp)
+            .background(AccessoryBackground)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(8.dp).background(Color(0xFF777B73), androidx.compose.foundation.shape.CircleShape))
+        Spacer(Modifier.width(9.dp))
+        Text("Stopped", color = Color(0xFFB6B9B1), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        Spacer(Modifier.weight(1f))
+        Row(
+            modifier = Modifier
+                .height(36.dp)
+                .background(AccessoryActive, RoundedCornerShape(10.dp))
+                .clickable(onClick = onRestart)
+                .padding(horizontal = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Start", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

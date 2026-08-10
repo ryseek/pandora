@@ -13,39 +13,63 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.MicNone
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
@@ -60,12 +84,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.sp
 import com.pandora.mobile.linux.CodexLimitWindow
 import com.pandora.mobile.linux.CodexLimitsState
@@ -87,11 +115,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val Ink = Color(0xFF20211F)
-private val Paper = Color(0xFFF7F7F4)
-private val Muted = Color(0xFF73756E)
-private val Line = Color(0xFFE3E3DD)
-private val Accent = Color(0xFF6D5CE7)
+private val Ink: Color @Composable get() = MaterialTheme.colorScheme.onBackground
+private val Paper: Color @Composable get() = MaterialTheme.colorScheme.background
+private val Muted: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val Line: Color @Composable get() = MaterialTheme.colorScheme.outlineVariant
+private val Accent: Color @Composable get() = MaterialTheme.colorScheme.primary
+private val SoftSurface: Color @Composable get() = MaterialTheme.colorScheme.surfaceVariant
+private val AccentSurface: Color @Composable get() = MaterialTheme.colorScheme.primaryContainer
 private val Terminal = Color(0xFF111210)
 private val TerminalText = Color(0xFFD8E4D1)
 
@@ -114,7 +144,8 @@ private fun PandoraApp() {
     val sessionRevision by sessionManager.revision.collectAsState()
     var screen by remember { mutableStateOf(Screen.Home) }
     var selectedSessionId by remember { mutableStateOf<String?>(null) }
-    MaterialTheme {
+    var themePreference by remember { mutableStateOf(AppSettings.theme(context)) }
+    PandoraTheme(themePreference) {
         Surface(color = Paper, modifier = Modifier.fillMaxSize()) {
             AnimatedContent(
                 targetState = screen,
@@ -141,6 +172,18 @@ private fun PandoraApp() {
                             selectedSessionId = it.id
                             screen = Screen.Container
                         },
+                        onRestartTerminal = {
+                            val restarted = sessionManager.restart(it.id) ?: return@HomeScreen
+                            selectedSessionId = restarted.id
+                            screen = Screen.Container
+                        },
+                        onRenameTerminal = { session, title -> sessionManager.rename(session.id, title) },
+                        onDeleteTerminal = { session -> sessionManager.delete(session.id) },
+                        onRenamePersistentTerminal = { name, title ->
+                            val session = sessionManager.attach(name)
+                            sessionManager.rename(session.id, title)
+                        },
+                        onDeletePersistentTerminal = sessionManager::deletePersistent,
                         onOpenPersistentTerminal = { name ->
                             selectedSessionId = sessionManager.attach(name).id
                             screen = Screen.Container
@@ -171,10 +214,19 @@ private fun PandoraApp() {
                                     selectedSessionId = null
                                     screen = Screen.Home
                                 },
+                                onRestart = {
+                                    val restarted = sessionManager.restart(session.id)
+                                    if (restarted != null) selectedSessionId = restarted.id
+                                },
                             )
                         }
                     }
                     Screen.Settings -> SettingsScreen(
+                        themePreference = themePreference,
+                        onThemePreferenceChanged = {
+                            AppSettings.setTheme(context, it)
+                            themePreference = it
+                        },
                         onBack = { screen = Screen.Home },
                         onCodexLogin = {
                             // PRoot shares Android's network namespace, so Chrome can return
@@ -199,6 +251,11 @@ private fun HomeScreen(
     onOpenChat: (String) -> Unit,
     onNewTerminal: () -> Unit,
     onOpenTerminal: (ManagedTerminalSession) -> Unit,
+    onRestartTerminal: (ManagedTerminalSession) -> Unit,
+    onRenameTerminal: (ManagedTerminalSession, String) -> Unit,
+    onDeleteTerminal: (ManagedTerminalSession) -> Unit,
+    onRenamePersistentTerminal: (String, String) -> Unit,
+    onDeletePersistentTerminal: (String) -> Unit,
     onOpenPersistentTerminal: (String) -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -209,6 +266,11 @@ private fun HomeScreen(
     var chats by remember(chatCatalog) { mutableStateOf(chatCatalog.readCached()) }
     var persistentTerminals by remember { mutableStateOf<List<String>>(emptyList()) }
     var catalogLoading by remember { mutableStateOf(chats.isEmpty()) }
+    var renameEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var deleteEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var actionInFlight by remember { mutableStateOf(false) }
+    var actionError by remember { mutableStateOf<String?>(null) }
+    val actionScope = rememberCoroutineScope()
     LaunchedEffect(limitRefresh, sessions.size) {
         limitState = CodexLimitsState.Loading
         catalogLoading = chats.isEmpty()
@@ -247,21 +309,25 @@ private fun HomeScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
-                    .background(Color(0xFFECEBE7), CircleShape)
+                    .size(40.dp)
+                    .background(SoftSurface, CircleShape)
                     .clickable(onClick = onSettings),
                 contentAlignment = Alignment.Center,
-            ) { Text("⚙", color = Ink, fontSize = 15.sp) }
+            ) {
+                Icon(Icons.Rounded.Settings, contentDescription = "Settings", tint = Ink, modifier = Modifier.size(20.dp))
+            }
             Spacer(Modifier.weight(1f))
             Text("Pandora", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.weight(1f))
             Box(
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(40.dp)
                     .background(Ink, CircleShape)
                     .clickable(onClick = onNewTerminal),
                 contentAlignment = Alignment.Center,
-            ) { Text(">_", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
+            ) {
+                Icon(Icons.Rounded.Terminal, contentDescription = "New terminal", tint = Paper, modifier = Modifier.size(20.dp))
+            }
         }
 
         Spacer(Modifier.height(18.dp))
@@ -271,7 +337,12 @@ private fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Text("✦", color = Accent, fontSize = 25.sp)
+                Box(
+                    Modifier.size(56.dp).background(AccentSurface, RoundedCornerShape(16.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = Accent, modifier = Modifier.size(25.dp))
+                }
                 Spacer(Modifier.height(12.dp))
                 Text(
                     if (catalogLoading) "Loading your workspace…" else "Your workspace is ready",
@@ -292,16 +363,30 @@ private fun HomeScreen(
                         entry = entry,
                         onOpenChat = onOpenChat,
                         onOpenTerminal = onOpenTerminal,
+                        onRestartTerminal = onRestartTerminal,
                         onOpenPersistentTerminal = onOpenPersistentTerminal,
+                        onRename = {
+                            actionError = null
+                            renameEntry = entry
+                        },
+                        onDelete = {
+                            actionError = null
+                            deleteEntry = entry
+                        },
                     )
                 }
             }
         }
 
         Spacer(Modifier.height(10.dp))
-        CodexLimitsFooter(state = limitState, onRefresh = { limitRefresh++ })
-        Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.weight(1f)) {
+                CodexLimitsFooter(state = limitState, onRefresh = { limitRefresh++ })
+            }
+            Spacer(Modifier.width(12.dp))
             Row(
                 modifier = Modifier
                     .background(Ink, RoundedCornerShape(24.dp))
@@ -309,11 +394,100 @@ private fun HomeScreen(
                     .padding(horizontal = 20.dp, vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("✦", color = Color(0xFFBEB3FF), fontSize = 15.sp)
+                Icon(
+                    Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(18.dp),
+                )
                 Spacer(Modifier.width(9.dp))
-                Text("New chat", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text("New chat", color = Paper, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
         }
+    }
+
+    renameEntry?.let { entry ->
+        RenameEntryDialog(
+            entry = entry,
+            loading = actionInFlight,
+            error = actionError,
+            onDismiss = {
+                if (!actionInFlight) {
+                    renameEntry = null
+                    actionError = null
+                }
+            },
+            onRename = { proposedTitle ->
+                when (entry) {
+                    is WorkspaceEntry.Chat -> actionScope.launch {
+                        actionInFlight = true
+                        actionError = null
+                        val result = withContext(Dispatchers.IO) {
+                            runCatching { chatCatalog.rename(entry.chat.id, proposedTitle) }
+                        }
+                        actionInFlight = false
+                        result.onSuccess {
+                            chats = chats.map {
+                                if (it.id == entry.chat.id) it.copy(title = proposedTitle.trim().take(64)) else it
+                            }
+                            renameEntry = null
+                        }.onFailure {
+                            actionError = it.message ?: "Could not rename this chat. Try again."
+                        }
+                    }
+                    is WorkspaceEntry.TerminalSession -> {
+                        onRenameTerminal(entry.session, proposedTitle)
+                        renameEntry = null
+                    }
+                    is WorkspaceEntry.PersistentTerminal -> {
+                        onRenamePersistentTerminal(entry.name, proposedTitle)
+                        persistentTerminals = persistentTerminals.filterNot { it == entry.name }
+                        renameEntry = null
+                    }
+                }
+            },
+        )
+    }
+
+    deleteEntry?.let { entry ->
+        DeleteEntryDialog(
+            entry = entry,
+            loading = actionInFlight,
+            error = actionError,
+            onDismiss = {
+                if (!actionInFlight) {
+                    deleteEntry = null
+                    actionError = null
+                }
+            },
+            onDelete = {
+                when (entry) {
+                    is WorkspaceEntry.Chat -> actionScope.launch {
+                        actionInFlight = true
+                        actionError = null
+                        val result = withContext(Dispatchers.IO) {
+                            runCatching { chatCatalog.delete(entry.chat.id) }
+                        }
+                        actionInFlight = false
+                        result.onSuccess {
+                            chats = chats.filterNot { it.id == entry.chat.id }
+                            deleteEntry = null
+                        }.onFailure {
+                            actionError = it.message ?: "Could not delete this chat. Try again."
+                        }
+                    }
+                    is WorkspaceEntry.TerminalSession -> {
+                        onDeleteTerminal(entry.session)
+                        deleteEntry = null
+                    }
+                    is WorkspaceEntry.PersistentTerminal -> {
+                        onDeletePersistentTerminal(entry.name)
+                        persistentTerminals = persistentTerminals.filterNot { it == entry.name }
+                        deleteEntry = null
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -337,13 +511,114 @@ private sealed interface WorkspaceEntry {
     }
 }
 
+private fun WorkspaceEntry.displayTitle(): String = when (this) {
+    is WorkspaceEntry.Chat -> chat.title
+    is WorkspaceEntry.TerminalSession -> session.title
+    is WorkspaceEntry.PersistentTerminal -> name.removePrefix("pandora-").let { "Terminal $it" }
+}
+
+private fun WorkspaceEntry.typeLabel(): String = if (this is WorkspaceEntry.Chat) "chat" else "terminal"
+
+@Composable
+private fun RenameEntryDialog(
+    entry: WorkspaceEntry,
+    loading: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onRename: (String) -> Unit,
+) {
+    var title by remember(entry.key) { mutableStateOf(entry.displayTitle()) }
+    val valid = title.trim().isNotEmpty()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename ${entry.typeLabel()}") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { if (it.length <= 64) title = it },
+                    enabled = !loading,
+                    singleLine = true,
+                    label = { Text("Name") },
+                    supportingText = {
+                        if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
+                        else Text("${title.length}/64")
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onRename(title.trim()) }, enabled = valid && !loading) {
+                if (loading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(if (loading) "Renaming…" else "Rename")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun DeleteEntryDialog(
+    entry: WorkspaceEntry,
+    loading: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val detail = when (entry) {
+        is WorkspaceEntry.Chat -> "This permanently deletes the conversation. This cannot be undone."
+        is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
+            PtyTerminalSession.State.PREPARING, PtyTerminalSession.State.RUNNING ->
+                "This ends the running shell and removes its terminal output. Files in /root remain saved."
+            PtyTerminalSession.State.STOPPED, PtyTerminalSession.State.FAILED ->
+                "This removes the stopped session and its terminal output. Files in /root remain saved."
+        }
+        is WorkspaceEntry.PersistentTerminal ->
+            "This ends the detached shell and removes it from Pandora. Files in /root remain saved."
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete ${entry.typeLabel()}?") },
+        text = {
+            Column {
+                Text(detail)
+                if (error != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(error, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDelete, enabled = !loading) {
+                if (loading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    if (loading) "Deleting…" else "Delete",
+                    color = if (loading) Muted else MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Cancel") } },
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WorkspaceEntryRow(
     entry: WorkspaceEntry,
     onOpenChat: (String) -> Unit,
     onOpenTerminal: (ManagedTerminalSession) -> Unit,
+    onRestartTerminal: (ManagedTerminalSession) -> Unit,
     onOpenPersistentTerminal: (String) -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
     val isChat = entry is WorkspaceEntry.Chat
     val title = when (entry) {
         is WorkspaceEntry.Chat -> entry.chat.title
@@ -353,48 +628,183 @@ private fun WorkspaceEntryRow(
     val subtitle = when (entry) {
         is WorkspaceEntry.Chat -> entry.chat.preview.ifBlank { "Codex conversation" }
         is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
-            PtyTerminalSession.State.PREPARING -> "Starting Linux…"
-            PtyTerminalSession.State.RUNNING -> "Linux terminal · running"
-            PtyTerminalSession.State.STOPPED -> "Linux terminal · ended"
-            PtyTerminalSession.State.FAILED -> "Linux terminal · failed"
+            PtyTerminalSession.State.PREPARING -> "Active · starting Linux…"
+            PtyTerminalSession.State.RUNNING -> "Active"
+            PtyTerminalSession.State.STOPPED -> "Stopped"
+            PtyTerminalSession.State.FAILED -> "Stopped"
         }
-        is WorkspaceEntry.PersistentTerminal -> "Linux terminal · detached · tap to reconnect"
+        is WorkspaceEntry.PersistentTerminal -> "Active · detached · tap to reconnect"
     }
-    Row(
-        modifier = Modifier
+    val terminalActive = when (entry) {
+        is WorkspaceEntry.Chat -> null
+        is WorkspaceEntry.PersistentTerminal -> true
+        is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
+            PtyTerminalSession.State.PREPARING, PtyTerminalSession.State.RUNNING -> true
+            PtyTerminalSession.State.STOPPED, PtyTerminalSession.State.FAILED -> false
+        }
+    }
+    Box(
+        Modifier
             .fillMaxWidth()
-            .clickable {
-                when (entry) {
-                    is WorkspaceEntry.Chat -> onOpenChat(entry.chat.id)
-                    is WorkspaceEntry.TerminalSession -> onOpenTerminal(entry.session)
-                    is WorkspaceEntry.PersistentTerminal -> onOpenPersistentTerminal(entry.name)
-                }
-            }
-            .padding(vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .background(
+                if (menuExpanded) AccentSurface else Color.Transparent,
+                RoundedCornerShape(14.dp),
+            ),
     ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = {
+                        when (entry) {
+                            is WorkspaceEntry.Chat -> onOpenChat(entry.chat.id)
+                            is WorkspaceEntry.TerminalSession -> onOpenTerminal(entry.session)
+                            is WorkspaceEntry.PersistentTerminal -> onOpenPersistentTerminal(entry.name)
+                        }
+                    },
+                    onLongClick = { menuExpanded = true },
+                    onLongClickLabel = "More actions",
+                )
+                .padding(vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
         Box(
             Modifier
                 .size(42.dp)
-                .background(if (isChat) Color(0xFFE9E6FA) else Color(0xFFE8F0E8), CircleShape),
+                .background(
+                    if (isChat) AccentSurface else MaterialTheme.colorScheme.secondaryContainer,
+                    CircleShape,
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                if (isChat) "✦" else ">_",
-                color = if (isChat) Accent else Color(0xFF3A8450),
-                fontSize = if (isChat) 17.sp else 11.sp,
-                fontFamily = if (isChat) FontFamily.Default else FontFamily.Monospace,
+            Icon(
+                if (isChat) Icons.Rounded.AutoAwesome else Icons.Rounded.Terminal,
+                contentDescription = null,
+                tint = if (isChat) Accent else MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(19.dp),
             )
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(title, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Spacer(Modifier.height(3.dp))
-            Text(subtitle, color = Muted, fontSize = 12.sp, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (terminalActive != null) {
+                    Box(
+                        Modifier.size(7.dp).background(
+                            if (terminalActive) Color(0xFF55A76A) else MaterialTheme.colorScheme.outline,
+                            CircleShape,
+                        ),
+                    )
+                    Spacer(Modifier.width(7.dp))
+                }
+                Text(
+                    subtitle,
+                    color = Muted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
-        if (entry.updatedAtMillis > 0L) {
-            Spacer(Modifier.width(8.dp))
-            Text(formatRelativeTime(entry.updatedAtMillis), color = Color(0xFFA1A29D), fontSize = 11.sp)
+            val stoppedSession = (entry as? WorkspaceEntry.TerminalSession)?.session?.takeIf {
+                it.state.value == PtyTerminalSession.State.STOPPED ||
+                    it.state.value == PtyTerminalSession.State.FAILED
+            }
+            if (stoppedSession != null) {
+                Spacer(Modifier.width(10.dp))
+                Row(
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .background(SoftSurface, RoundedCornerShape(12.dp))
+                        .clickable { onRestartTerminal(stoppedSession) }
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Rounded.PlayArrow,
+                        contentDescription = "Start ${stoppedSession.title}",
+                        tint = Accent,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("Start", color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            } else if (entry.updatedAtMillis > 0L) {
+                Spacer(Modifier.width(8.dp))
+                Text(formatRelativeTime(entry.updatedAtMillis), color = Muted, fontSize = 11.sp)
+            }
+        }
+        Box(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .size(1.dp),
+        ) {
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                modifier = Modifier.width(172.dp),
+                offset = DpOffset((-8).dp, (-28).dp),
+                shape = RoundedCornerShape(16.dp),
+                containerColor = SoftSurface,
+                tonalElevation = 0.dp,
+                shadowElevation = 6.dp,
+            ) {
+                DropdownMenuItem(
+                    text = {
+                        Text("Rename", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    },
+                    leadingIcon = {
+                        Box(
+                            Modifier.size(30.dp).background(AccentSurface, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Rounded.Edit,
+                                contentDescription = null,
+                                tint = Accent,
+                                modifier = Modifier.size(17.dp),
+                            )
+                        }
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onRename()
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                )
+                Spacer(Modifier.height(2.dp))
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            "Delete",
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    },
+                    leadingIcon = {
+                        Box(
+                            Modifier
+                                .size(30.dp)
+                                .background(MaterialTheme.colorScheme.errorContainer, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Rounded.Delete,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(17.dp),
+                            )
+                        }
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onDelete()
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                )
+            }
         }
     }
 }
@@ -429,12 +839,20 @@ private fun CodexLimitsFooter(state: CodexLimitsState, onRefresh: () -> Unit) {
         }
     }
     Row(
-        modifier = Modifier.clickable(onClick = onRefresh).padding(vertical = 5.dp),
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .clickable(onClick = onRefresh),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(7.dp).background(color, CircleShape))
         Spacer(Modifier.width(8.dp))
-        Text(label, color = Muted, fontSize = 13.sp, maxLines = 1)
+        Text(
+            label,
+            color = Muted,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -591,7 +1009,7 @@ private fun SessionCard(session: ManagedTerminalSession, onClick: () -> Unit) {
 private fun StatusPill() {
     Row(
         modifier = Modifier
-            .background(Color(0xFFECEBE7), RoundedCornerShape(100.dp))
+            .background(SoftSurface, RoundedCornerShape(100.dp))
             .padding(horizontal = 11.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -692,24 +1110,38 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier.size(38.dp).background(Color(0xFFEAEAE5), CircleShape).clickable(onClick = onBack),
+                Modifier.size(40.dp).background(SoftSurface, CircleShape).clickable(onClick = onBack),
                 contentAlignment = Alignment.Center,
-            ) { Text("←", color = Ink, fontSize = 20.sp) }
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Ink, modifier = Modifier.size(20.dp))
+            }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("Codex chat", color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text("Codex", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 Box {
-                    Text(
-                        "$detail  ▾",
+                    Row(
                         modifier = Modifier.clickable(enabled = models.isNotEmpty()) { modelMenuOpen = true },
-                        color = if (models.isNotEmpty()) Accent else Muted,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            detail,
+                            color = if (models.isNotEmpty()) Accent else Muted,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                        )
+                        if (models.isNotEmpty()) {
+                            Icon(
+                                Icons.Rounded.KeyboardArrowDown,
+                                contentDescription = "Choose model",
+                                tint = Accent,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
                     DropdownMenu(expanded = modelMenuOpen, onDismissRequest = { modelMenuOpen = false }) {
                         models.forEach { option ->
                             DropdownMenuItem(
@@ -739,102 +1171,343 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit) {
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
         if (messages.isEmpty()) {
-            Column(
-                modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Box(
-                    Modifier.size(52.dp).background(Color(0xFFE9E6FA), RoundedCornerShape(17.dp)),
-                    contentAlignment = Alignment.Center
-                ) { Text("✦", color = Accent, fontSize = 22.sp) }
-                Spacer(Modifier.height(18.dp))
-                Text("Start with an idea", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    when (state) {
-                        is CodexChatState.Starting -> "Starting the native Codex agent harness…"
-                        is CodexChatState.Failed -> (state as CodexChatState.Failed).detail
-                        else -> "Codex can inspect, run, and edit files in your local workspace."
-                    },
-                    color = Muted,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
+            if (state is CodexChatState.Starting) {
+                InstallationProgress(
+                    detail = (state as CodexChatState.Starting).detail,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+            } else {
+                EmptyChatState(
+                    error = (state as? CodexChatState.Failed)?.detail,
+                    onSuggestion = { draft = it },
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
             }
         } else {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(22.dp),
             ) {
-                items(messages, key = { it.id }) { message -> ChatMessageRow(message) }
+                itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
+                    val startsAssistantGroup = message.role != ChatRole.ASSISTANT ||
+                        index == 0 ||
+                        messages[index - 1].role != ChatRole.ASSISTANT
+                    ChatMessageRow(message, showAssistantIdentity = startsAssistantGroup)
+                }
             }
         }
+        if (state is CodexChatState.Running) {
+            AgentWorkingIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 2.dp),
+            )
+        }
         Row(
-            modifier = Modifier.padding(16.dp).border(1.dp, Line, RoundedCornerShape(19.dp)).padding(14.dp),
-            verticalAlignment = Alignment.Bottom
+            modifier = Modifier
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .background(SoftSurface, RoundedCornerShape(24.dp))
+                .padding(start = 16.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicTextField(
                 value = draft,
                 onValueChange = { draft = it },
                 enabled = ready,
-                modifier = Modifier.weight(1f),
-                textStyle = TextStyle(color = Ink, fontSize = 15.sp),
+                modifier = Modifier.weight(1f).heightIn(min = 40.dp, max = 132.dp),
+                textStyle = TextStyle(color = Ink, fontSize = 15.sp, lineHeight = 21.sp),
                 cursorBrush = SolidColor(Accent),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { submit() }),
                 decorationBox = { inner ->
-                    if (draft.isEmpty()) {
-                        Text(
-                            if (ready) "Message Codex…" else "Codex is not ready…",
-                            color = Color(0xFFA2A39E),
-                            fontSize = 15.sp,
-                        )
+                    Box(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (draft.isEmpty()) {
+                            Text(
+                                when {
+                                    ready -> "Message Codex…"
+                                    state is CodexChatState.Running -> "Codex is working…"
+                                    else -> "Codex is not ready…"
+                                },
+                                color = Color(0xFFA2A39E),
+                                fontSize = 15.sp,
+                                lineHeight = 21.sp,
+                            )
+                        }
+                        inner()
                     }
-                    inner()
                 }
             )
-            Spacer(Modifier.width(10.dp))
+            IconButton(
+                onClick = {},
+                enabled = false,
+                modifier = Modifier.size(42.dp),
+            ) {
+                Icon(
+                    Icons.Rounded.MicNone,
+                    contentDescription = "Voice input coming soon",
+                    tint = Muted,
+                    modifier = Modifier.size(21.dp),
+                )
+            }
             Box(
                 Modifier
-                    .size(38.dp)
-                    .background(if (ready && draft.isNotBlank()) Accent else Color(0xFFDADAD4), CircleShape)
+                    .size(40.dp)
+                    .background(if (ready && draft.isNotBlank()) Accent else Line, CircleShape)
                     .clickable(enabled = ready && draft.isNotBlank(), onClick = { submit() }),
                 contentAlignment = Alignment.Center
-            ) { Text("↑", color = Color.White, fontSize = 18.sp) }
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.Send,
+                    contentDescription = "Send message",
+                    tint = if (ready && draft.isNotBlank()) MaterialTheme.colorScheme.onPrimary else Muted,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun ChatMessageRow(message: ChatMessage) {
-    when (message.role) {
-        ChatRole.SYSTEM -> Text(
-            message.text,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
-            color = Color(0xFFD18B27),
-            fontSize = 12.sp,
-            lineHeight = 17.sp,
+private fun AgentWorkingIndicator(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.heightIn(min = 32.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            color = Accent,
+            strokeWidth = 2.dp,
         )
-        ChatRole.USER, ChatRole.ASSISTANT -> Row(
+        Spacer(Modifier.width(9.dp))
+        Text(
+            "Codex is working…",
+            color = Muted,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun ChatMessageRow(message: ChatMessage, showAssistantIdentity: Boolean = true) {
+    when (message.role) {
+        ChatRole.SYSTEM -> Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(12.dp))
+                .padding(horizontal = 13.dp, vertical = 10.dp),
+        ) {
+            Text(
+                message.text,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+        }
+        ChatRole.USER -> Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = if (message.role == ChatRole.USER) Arrangement.End else Arrangement.Start,
+            horizontalArrangement = Arrangement.End,
         ) {
             Text(
                 message.text,
                 modifier = Modifier
-                    .fillMaxWidth(0.88f)
-                    .background(
-                        if (message.role == ChatRole.USER) Ink else Color(0xFFECEBE7),
-                        RoundedCornerShape(18.dp),
-                    )
-                    .padding(horizontal = 15.dp, vertical = 12.dp),
-                color = if (message.role == ChatRole.USER) Color.White else Ink,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
+                    .widthIn(max = 320.dp)
+                    .background(AccentSurface, RoundedCornerShape(18.dp))
+                    .padding(horizontal = 15.dp, vertical = 11.dp),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontSize = 15.sp,
+                lineHeight = 21.sp,
             )
+        }
+        ChatRole.ASSISTANT -> AssistantMessage(message, showIdentity = showAssistantIdentity)
+    }
+}
+
+@Composable
+private fun AssistantMessage(message: ChatMessage, showIdentity: Boolean) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(message.id) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        if (showIdentity) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(27.dp).background(AccentSurface, RoundedCornerShape(9.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = Accent, modifier = Modifier.size(15.dp))
+                }
+                Spacer(Modifier.width(9.dp))
+                Text("Codex", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        RichMarkdown(
+            markdown = message.text,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = if (showIdentity) 9.dp else 0.dp, end = 4.dp),
+            color = Ink,
+        )
+        Row(Modifier.padding(top = 2.dp)) {
+            IconButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(message.text))
+                    copied = true
+                },
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                    contentDescription = if (copied) "Copied" else "Copy response",
+                    tint = if (copied) Accent else Muted,
+                    modifier = Modifier.size(17.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyChatState(
+    error: String?,
+    onSuggestion: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.padding(horizontal = 22.dp, vertical = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier.size(54.dp).background(AccentSurface, RoundedCornerShape(17.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = Accent, modifier = Modifier.size(25.dp))
+        }
+        Spacer(Modifier.height(18.dp))
+        Text(
+            if (error == null) "What can I help you build?" else "Codex needs attention",
+            color = Ink,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            error ?: "Ask about the workspace, plan a change, or start building.",
+            color = Muted,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
+        )
+        if (error == null) {
+            Spacer(Modifier.height(24.dp))
+            listOf(
+                "Explain this project",
+                "Find something to improve",
+                "Help me implement a feature",
+            ).forEach { suggestion ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onSuggestion(suggestion) }
+                        .padding(horizontal = 4.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(suggestion, modifier = Modifier.weight(1f), color = Ink, fontSize = 14.sp)
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowForward,
+                        contentDescription = null,
+                        tint = Accent,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+            }
+        }
+    }
+}
+
+@Composable
+private fun InstallationProgress(detail: String, modifier: Modifier = Modifier) {
+    val stages = listOf(
+        "Prepare workspace",
+        "Install Alpine Linux",
+        "Add system utilities",
+        "Configure terminal sessions",
+        "Install Codex",
+        "Start local agent",
+    )
+    val stage = when {
+        detail.contains("workspace", ignoreCase = true) -> 0
+        detail.contains("Alpine", ignoreCase = true) -> 1
+        detail.contains("SSL", ignoreCase = true) || detail.contains("utilities", ignoreCase = true) -> 2
+        detail.contains("terminal", ignoreCase = true) -> 3
+        detail.contains("Codex", ignoreCase = true) -> 4
+        detail.contains("container", ignoreCase = true) -> 5
+        else -> 0
+    }
+    Column(
+        modifier = modifier.padding(horizontal = 28.dp, vertical = 36.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier.size(52.dp).background(AccentSurface, RoundedCornerShape(16.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = Accent, modifier = Modifier.size(24.dp))
+        }
+        Spacer(Modifier.height(20.dp))
+        Text("Setting up your local workspace", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Pandora is preparing a private Linux environment on this device. You can leave this screen open while it finishes.",
+            color = Muted,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
+        )
+        Spacer(Modifier.height(22.dp))
+        LinearProgressIndicator(
+            progress = { (stage + 0.45f) / stages.size },
+            modifier = Modifier.fillMaxWidth().height(5.dp),
+            color = Accent,
+            trackColor = SoftSurface,
+        )
+        Spacer(Modifier.height(9.dp))
+        Text(detail, color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(20.dp))
+        stages.forEachIndexed { index, label ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(22.dp).background(
+                        when {
+                            index < stage -> Accent
+                            index == stage -> AccentSurface
+                            else -> SoftSurface
+                        },
+                        CircleShape,
+                    ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (index < stage) {
+                        Icon(
+                            Icons.Rounded.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    } else if (index == stage) {
+                        CircularProgressIndicator(modifier = Modifier.size(12.dp), color = Accent, strokeWidth = 2.dp)
+                    }
+                }
+                Spacer(Modifier.width(11.dp))
+                Text(label, color = if (index <= stage) Ink else Muted, fontSize = 13.sp)
+            }
         }
     }
 }
@@ -844,10 +1517,12 @@ private fun ContainerScreen(
     session: ManagedTerminalSession,
     onBack: () -> Unit,
     onStop: () -> Unit,
+    onRestart: () -> Unit,
 ) {
     TerminalScreen(
         session = session,
         onBack = onBack,
         onStop = onStop,
+        onRestart = onRestart,
     )
 }

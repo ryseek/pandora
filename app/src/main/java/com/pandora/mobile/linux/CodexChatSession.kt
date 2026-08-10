@@ -78,6 +78,10 @@ class CodexChatSession(
     @Volatile private var threadId: String? = null
     @Volatile private var model: String = "Codex"
 
+    /** The requested or resolved thread identity, used to avoid opening a second writer. */
+    val activeThreadId: String?
+        get() = threadId ?: resumeThreadId
+
     init {
         LinuxSessionService.setChatActive(appContext, true)
         scope.launch { start() }
@@ -118,7 +122,7 @@ class CodexChatSession(
     fun close() {
         if (!closed.compareAndSet(false, true)) return
         runCatching { writer?.close() }
-        process?.destroy()
+        process?.let(installer::terminateProcessTree)
         process = null
         writer = null
         _state.value = CodexChatState.Closed
@@ -135,6 +139,8 @@ class CodexChatSession(
             check(File(installer.workspace, ".local/bin/codex").exists()) {
                 "Codex CLI is not installed yet. Open a Linux session while online to retry installation."
             }
+
+            installer.terminateStaleCodexAppServers()
 
             val command = installer.containerCommand("/root/.local/bin/codex", "app-server")
             val child = installer.startContainerProcess(command, mergeError = false)
@@ -343,7 +349,7 @@ class CodexChatSession(
         addSystemMessage(detail)
         _state.value = CodexChatState.Failed(detail)
         runCatching { writer?.close() }
-        process?.destroy()
+        process?.let(installer::terminateProcessTree)
         writer = null
         process = null
         LinuxSessionService.setChatActive(appContext, false)

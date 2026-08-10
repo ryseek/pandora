@@ -20,6 +20,16 @@ class PandoraChatRegistry(context: Context) {
         file.writeText(ids.sorted().joinToString("\n", postfix = "\n"))
     }
 
+    fun remove(threadId: String) = synchronized(LOCK) {
+        val ids = read().toMutableSet()
+        if (!ids.remove(threadId)) return@synchronized
+        if (ids.isEmpty()) {
+            file.delete()
+        } else {
+            file.writeText(ids.sorted().joinToString("\n", postfix = "\n"))
+        }
+    }
+
     private companion object {
         val LOCK = Any()
     }

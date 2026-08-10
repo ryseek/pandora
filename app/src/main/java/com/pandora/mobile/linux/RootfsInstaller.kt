@@ -8,6 +8,8 @@ import java.io.InputStream
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.UUID
+import java.util.WeakHashMap
 import java.util.zip.GZIPInputStream
 
 class RootfsInstaller(private val context: Context) {
@@ -24,6 +26,7 @@ class RootfsInstaller(private val context: Context) {
         synchronized(INSTALL_LOCK) {
             tempDir.mkdirs()
             ensurePersistentWorkspace(onStatus)
+            ensureAgentKnowledge()
             ensureCodexDefaults()
             check(proot.exists()) { "Bundled PRoot runtime is missing" }
 
@@ -43,6 +46,7 @@ class RootfsInstaller(private val context: Context) {
         synchronized(INSTALL_LOCK) {
             tempDir.mkdirs()
             ensurePersistentWorkspace(onStatus)
+            ensureAgentKnowledge()
             ensureCodexDefaults()
             check(proot.exists()) { "Bundled PRoot runtime is missing" }
             onStatus("Repairing Alpine Linux…")
@@ -175,6 +179,17 @@ class RootfsInstaller(private val context: Context) {
         }
     }
 
+    /** Installs global device-specific Codex context without replacing user edits. */
+    private fun ensureAgentKnowledge() {
+        val instructions = File(workspace, ".codex/AGENTS.md")
+        if (instructions.exists()) return
+
+        instructions.parentFile?.mkdirs()
+        context.assets.open("pandora/AGENTS.md").use { input ->
+            instructions.outputStream().use(input::copyTo)
+        }
+    }
+
     /**
      * Android/PRoot has neither a desktop keyring nor the user namespaces Bubblewrap needs.
      * Keep these machine-level Codex settings above any TOML tables so they apply globally.
@@ -234,8 +249,9 @@ class RootfsInstaller(private val context: Context) {
         *executableAndArgs,
     )
 
-    internal fun startContainerProcess(command: List<String>, mergeError: Boolean): Process =
-        ProcessBuilder(command).redirectErrorStream(mergeError).apply {
+    internal fun startContainerProcess(command: List<String>, mergeError: Boolean): Process {
+        val processIdentity = UUID.randomUUID().toString()
+        val process = ProcessBuilder(command).redirectErrorStream(mergeError).apply {
             environment().apply {
                 put("PROOT_TMP_DIR", tempDir.absolutePath)
                 put("LD_LIBRARY_PATH", nativeLibDir.absolutePath)
@@ -245,8 +261,81 @@ class RootfsInstaller(private val context: Context) {
                 put("HOME", "/root")
                 put("ZMX_DIR", "/root/.local/state/zmx/sessions")
                 put("TERM", "dumb")
+                put(PROCESS_IDENTITY_ENV, processIdentity)
             }
         }.start()
+        synchronized(PROCESS_IDENTITIES) { PROCESS_IDENTITIES[process] = processIdentity }
+        return process
+    }
+
+    /** PRoot's launcher can exit without terminating its Node/Codex descendants. */
+    internal fun terminateProcessTree(process: Process) {
+        val identity = synchronized(PROCESS_IDENTITIES) { PROCESS_IDENTITIES.remove(process) }
+        if (identity != null) {
+            ownProcessDirectories()
+                .filter { directory ->
+                    runCatching {
+                        File(directory, "environ")
+                            .readBytes()
+                            .toString(Charsets.UTF_8)
+                            .split('\u0000')
+                            .contains("$PROCESS_IDENTITY_ENV=$identity")
+                    }.getOrDefault(false)
+                }
+                .mapNotNull { it.name.toIntOrNull() }
+                .sortedDescending()
+                .forEach(::killPid)
+        }
+        if (process.isAlive) runCatching { process.destroyForcibly() }
+    }
+
+    /** Clears app-server trees orphaned by an Android process restart or an older build. */
+    internal fun terminateStaleCodexAppServers() {
+        val ownPid = android.os.Process.myPid()
+        ownProcessDirectories()
+            .mapNotNull { directory -> directory.name.toIntOrNull()?.let { it to directory } }
+            .filter { (pid, _) -> pid != ownPid }
+            .filter { (_, directory) ->
+                val command = runCatching {
+                    File(directory, "cmdline").readText().replace('\u0000', ' ')
+                }.getOrDefault("")
+                command.contains(proot.absolutePath) &&
+                    command.contains("/root/.local/bin/codex") &&
+                    command.contains("app-server")
+            }
+            .map { it.first }
+            .toList()
+            .forEach(::terminatePidTree)
+    }
+
+    private fun terminatePidTree(rootPid: Int) {
+        val processIds = linkedSetOf<Int>()
+        fun collect(pid: Int) {
+            if (!processIds.add(pid)) return
+            val children = runCatching {
+                File("/proc/$pid/task/$pid/children")
+                    .readText()
+                    .trim()
+                    .split(Regex("\\s+"))
+                    .mapNotNull(String::toIntOrNull)
+            }.getOrDefault(emptyList())
+            children.forEach(::collect)
+        }
+        collect(rootPid)
+        processIds.toList().asReversed().forEach(::killPid)
+    }
+
+    private fun ownProcessDirectories(): Sequence<File> {
+        val ownUid = android.os.Process.myUid()
+        return File("/proc").listFiles().orEmpty().asSequence().filter { directory ->
+            directory.name.toIntOrNull() != null &&
+                runCatching { Os.stat(directory.absolutePath).st_uid == ownUid }.getOrDefault(false)
+        }
+    }
+
+    private fun killPid(pid: Int) {
+        runCatching { Os.kill(pid, android.system.OsConstants.SIGKILL) }
+    }
 
     private fun runContainerCommand(command: List<String>): Pair<Int, String> {
         val process = startContainerProcess(command, mergeError = true)
@@ -372,7 +461,9 @@ class RootfsInstaller(private val context: Context) {
 
     private companion object {
         const val TAG = "RootfsInstaller"
+        const val PROCESS_IDENTITY_ENV = "PANDORA_PROCESS_ID"
         val INSTALL_LOCK = Any()
+        val PROCESS_IDENTITIES = WeakHashMap<Process, String>()
         val DEFAULT_PACKAGES = listOf(
             "ca-certificates",
             "ssl_client",

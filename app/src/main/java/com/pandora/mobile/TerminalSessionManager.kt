@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
 class ManagedTerminalSession internal constructor(
     context: Context,
     val id: String,
-    val title: String,
+    initialTitle: String,
     val createdAtMillis: Long,
     val persistentSessionName: String,
     private val initialCommand: String?,
@@ -37,6 +37,8 @@ class ManagedTerminalSession internal constructor(
     private var initialCommandSent = false
     private var loginUrlOpened = false
     private val loginOutput = StringBuilder()
+    var title: String = initialTitle
+        private set
 
     init {
         emulator.onResponse = pty::send
@@ -62,6 +64,11 @@ class ManagedTerminalSession internal constructor(
     fun send(bytes: ByteArray) = pty.send(bytes)
 
     fun resize(columns: Int, rows: Int) = pty.resize(columns, rows)
+
+    fun rename(newTitle: String) {
+        title = newTitle
+        onStateChanged()
+    }
 
     fun stop(killPersistent: Boolean = true) {
         pty.stop()
@@ -121,7 +128,7 @@ class TerminalSessionManager(private val context: Context) {
         managed = ManagedTerminalSession(
             context = context,
             id = UUID.randomUUID().toString(),
-            title = if (persistentSessionName == null) {
+            initialTitle = if (persistentSessionName == null) {
                 "Linux session ${nextSessionNumber++}"
             } else {
                 persistentSessionName.removePrefix("pandora-").let { "Terminal $it" }
@@ -142,11 +149,62 @@ class TerminalSessionManager(private val context: Context) {
 
     fun find(id: String?): ManagedTerminalSession? = _sessions.value.firstOrNull { it.id == id }
 
+    /** Replaces a stopped transcript with a fresh shell while preserving its visible title. */
+    fun restart(id: String): ManagedTerminalSession? {
+        val previous = find(id) ?: return null
+        if (
+            previous.state.value == PtyTerminalSession.State.PREPARING ||
+            previous.state.value == PtyTerminalSession.State.RUNNING
+        ) return previous
+        val replacement = ManagedTerminalSession(
+            context = context,
+            id = UUID.randomUUID().toString(),
+            initialTitle = previous.title,
+            createdAtMillis = System.currentTimeMillis(),
+            persistentSessionName = "pandora-${UUID.randomUUID().toString().take(8)}",
+            initialCommand = null,
+            onStateChanged = ::refreshForegroundService,
+        )
+        _sessions.value = _sessions.value.map { if (it.id == id) replacement else it }
+        refreshForegroundService()
+        return replacement
+    }
+
     fun stop(id: String) {
         val session = find(id) ?: return
-        _sessions.value = _sessions.value - session
         session.stop()
         refreshForegroundService()
+    }
+
+    fun rename(id: String, newTitle: String) {
+        val title = newTitle.trim().take(64)
+        if (title.isBlank()) return
+        find(id)?.rename(title)
+    }
+
+    fun delete(id: String) {
+        val session = find(id) ?: return
+        _sessions.value = _sessions.value.filterNot { it.id == id }
+        session.stop()
+        refreshForegroundService()
+    }
+
+    fun deletePersistent(name: String) {
+        _sessions.value.firstOrNull { it.persistentSessionName == name }?.let {
+            delete(it.id)
+            return
+        }
+        thread(name = "zmx-delete-$name", isDaemon = true) {
+            runCatching {
+                val installer = RootfsInstaller(context.applicationContext)
+                val process = installer.startContainerProcess(
+                    installer.containerCommand("/root/.local/bin/zmx", "kill", name, "--force"),
+                    mergeError = true,
+                )
+                process.inputStream.close()
+                process.waitFor()
+            }
+        }
     }
 
     fun stopAll() {

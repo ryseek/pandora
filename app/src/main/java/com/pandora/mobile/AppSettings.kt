@@ -9,6 +9,9 @@ object AppSettings {
 
     private const val PREFERENCES = "pandora_settings"
     private const val TERMINAL_FONT_SIZE = "terminal_font_size"
+    private const val THEME = "theme"
+
+    enum class ThemePreference { SYSTEM, LIGHT, DARK }
 
     fun terminalFontSize(context: Context): Float =
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
@@ -19,6 +22,20 @@ object AppSettings {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit()
             .putFloat(TERMINAL_FONT_SIZE, size.coerceIn(MIN_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_SIZE))
+            .apply()
+    }
+
+    fun theme(context: Context): ThemePreference {
+        val stored = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getString(THEME, ThemePreference.SYSTEM.name)
+        return runCatching { ThemePreference.valueOf(stored.orEmpty()) }
+            .getOrDefault(ThemePreference.SYSTEM)
+    }
+
+    fun setTheme(context: Context, theme: ThemePreference) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit()
+            .putString(THEME, theme.name)
             .apply()
     }
 }

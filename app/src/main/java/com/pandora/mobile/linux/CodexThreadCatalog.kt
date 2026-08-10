@@ -119,7 +119,68 @@ class CodexThreadCatalog(context: Context) {
                 return threads
             }
         } finally {
-            process.destroyForcibly()
+            installer.terminateProcessTree(process)
+            executor.shutdownNow()
+            runCatching { stderrDrainer.join(500) }
+        }
+    }
+
+    fun rename(threadId: String, newName: String) {
+        val name = newName.trim().take(64)
+        require(name.isNotBlank()) { "Enter a name for this chat" }
+        request("thread/name/set", JSONObject().put("threadId", threadId).put("name", name))
+        writeCache(readCached().map { if (it.id == threadId) it.copy(title = name) else it })
+    }
+
+    fun delete(threadId: String) {
+        request("thread/delete", JSONObject().put("threadId", threadId))
+        registry.remove(threadId)
+        writeCache(readCached().filterNot { it.id == threadId })
+    }
+
+    private fun request(method: String, params: JSONObject) {
+        installer.installIfNeeded { }
+        val process = installer.startContainerProcess(
+            installer.containerCommand("/root/.local/bin/codex", "app-server"),
+            mergeError = false,
+        )
+        val stderrDrainer = thread(name = "codex-action-stderr", isDaemon = true) {
+            runCatching { process.errorStream.bufferedReader().useLines { lines -> lines.forEach { } } }
+        }
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            process.outputStream.bufferedWriter().use { writer ->
+                writer.appendLine(
+                    JSONObject()
+                        .put("method", "initialize")
+                        .put("id", 1)
+                        .put(
+                            "params",
+                            JSONObject().put(
+                                "clientInfo",
+                                JSONObject()
+                                    .put("name", "pandora_android")
+                                    .put("title", "Pandora Android")
+                                    .put("version", "0.1.0"),
+                            ),
+                        )
+                        .toString(),
+                )
+                writer.appendLine(JSONObject().put("method", "initialized").put("params", JSONObject()).toString())
+                writer.appendLine(JSONObject().put("method", method).put("id", 2).put("params", params).toString())
+                writer.flush()
+                val response = executor.submit<JSONObject> {
+                    process.inputStream.bufferedReader().useLines { lines ->
+                        lines.mapNotNull { line -> runCatching { JSONObject(line) }.getOrNull() }
+                            .first { it.optInt("id", -1) == 2 }
+                    }
+                }.get(30, TimeUnit.SECONDS)
+                response.optJSONObject("error")?.let {
+                    error(it.optString("message", "Could not update this chat"))
+                }
+            }
+        } finally {
+            installer.terminateProcessTree(process)
             executor.shutdownNow()
             runCatching { stderrDrainer.join(500) }
         }
