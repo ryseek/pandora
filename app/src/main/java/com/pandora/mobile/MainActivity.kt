@@ -62,6 +62,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MicNone
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PushPin
@@ -126,6 +127,7 @@ import com.pandora.mobile.linux.ArchiveCatalog
 import com.pandora.mobile.linux.PtyTerminalSession
 import com.pandora.mobile.linux.PandoraProject
 import com.pandora.mobile.linux.ProjectCatalog
+import com.pandora.mobile.linux.RootfsInstaller
 import com.pandora.mobile.linux.ZmxSessionCatalog
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -146,7 +148,14 @@ private val AccentSurface: Color @Composable get() = MaterialTheme.colorScheme.p
 private val Terminal = Color(0xFF111210)
 private val TerminalText = Color(0xFFD8E4D1)
 
-private enum class Screen { Home, Chat, Container, Settings, Archive }
+private enum class Screen { Onboarding, Home, Chat, Container, Settings, Archive }
+
+private sealed interface OnboardingState {
+    data object Welcome : OnboardingState
+    data class Installing(val detail: String) : OnboardingState
+    data object Ready : OnboardingState
+    data class Failed(val detail: String) : OnboardingState
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -164,7 +173,11 @@ private fun PandoraApp() {
     val sessions by sessionManager.sessions.collectAsState()
     val sessionRevision by sessionManager.revision.collectAsState()
     val chatSessions by chatManager.sessions.collectAsState()
-    var screen by remember { mutableStateOf(Screen.Home) }
+    var screen by remember {
+        mutableStateOf(
+            if (AppSettings.onboardingCompleted(context)) Screen.Home else Screen.Onboarding,
+        )
+    }
     var settingsReturnScreen by remember { mutableStateOf(Screen.Home) }
     var selectedSessionId by remember { mutableStateOf<String?>(null) }
     var selectedChatSessionId by remember { mutableStateOf<String?>(null) }
@@ -177,6 +190,17 @@ private fun PandoraApp() {
                 label = "screen"
             ) { target ->
                 when (target) {
+                    Screen.Onboarding -> OnboardingScreen(
+                        onSignIn = {
+                            AppSettings.setOnboardingCompleted(context, true)
+                            selectedSessionId = sessionManager.create("codex login").id
+                            screen = Screen.Container
+                        },
+                        onExplore = {
+                            AppSettings.setOnboardingCompleted(context, true)
+                            screen = Screen.Home
+                        },
+                    )
                     Screen.Home -> HomeScreen(
                         sessions = sessions,
                         revision = sessionRevision,
@@ -217,6 +241,10 @@ private fun PandoraApp() {
                         onSettings = {
                             settingsReturnScreen = Screen.Home
                             screen = Screen.Settings
+                        },
+                        onCodexLogin = {
+                            selectedSessionId = sessionManager.create("codex login").id
+                            screen = Screen.Container
                         },
                     )
                     Screen.Chat -> {
@@ -285,6 +313,458 @@ private fun PandoraApp() {
 }
 
 @Composable
+private fun OnboardingScreen(
+    onSignIn: () -> Unit,
+    onExplore: () -> Unit,
+) {
+    val context = LocalContext.current.applicationContext
+    val installer = remember(context) { RootfsInstaller(context) }
+    val scope = rememberCoroutineScope()
+    var state by remember(installer) {
+        mutableStateOf<OnboardingState>(
+            if (installer.isSetupComplete()) OnboardingState.Ready else OnboardingState.Welcome,
+        )
+    }
+    var setupRunning by remember { mutableStateOf(false) }
+
+    fun startSetup() {
+        if (setupRunning) return
+        setupRunning = true
+        state = OnboardingState.Installing("Preparing your workspace…")
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    installer.installIfNeeded { detail ->
+                        scope.launch { state = OnboardingState.Installing(detail) }
+                    }
+                }
+            }
+            setupRunning = false
+            state = when {
+                result.isFailure -> OnboardingState.Failed(
+                    result.exceptionOrNull()?.message ?: "Pandora could not finish setup.",
+                )
+                installer.isSetupComplete() -> OnboardingState.Ready
+                else -> OnboardingState.Failed(
+                    "Pandora could not download every required tool. Check your connection and try again.",
+                )
+            }
+        }
+    }
+
+    when (val current = state) {
+        OnboardingState.Welcome -> OnboardingWelcome(
+            continuing = installer.rootfs.exists(),
+            onStart = ::startSetup,
+        )
+        is OnboardingState.Installing -> OnboardingSetupProgress(current.detail)
+        OnboardingState.Ready -> OnboardingReady(onSignIn = onSignIn, onExplore = onExplore)
+        is OnboardingState.Failed -> OnboardingFailure(current.detail, onRetry = ::startSetup)
+    }
+}
+
+@Composable
+private fun OnboardingWelcome(continuing: Boolean, onStart: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+    ) {
+        OnboardingBrand()
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Spacer(Modifier.height(34.dp))
+            OnboardingHeroMark()
+            Spacer(Modifier.height(28.dp))
+            Text(
+                "Your coding workspace, right here.",
+                color = Ink,
+                fontSize = 32.sp,
+                lineHeight = 37.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Pandora brings Codex, your projects, and a real terminal together on this device.",
+                color = Muted,
+                fontSize = 16.sp,
+                lineHeight = 23.sp,
+            )
+            Spacer(Modifier.height(30.dp))
+            OnboardingValueRow(
+                icon = Icons.Rounded.Folder,
+                title = "Work with real projects",
+                detail = "Open a folder, start fresh, or clone a GitHub repository.",
+            )
+            OnboardingValueRow(
+                icon = Icons.Rounded.AutoAwesome,
+                title = "Build with Codex",
+                detail = "Ask questions, plan changes, and let the agent edit and run code.",
+            )
+            OnboardingValueRow(
+                icon = Icons.Rounded.Terminal,
+                title = "Use a full terminal",
+                detail = "Your command-line tools and sessions are always close by.",
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(SoftSurface, RoundedCornerShape(14.dp))
+                    .padding(15.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Icon(Icons.Rounded.Lock, contentDescription = null, tint = Accent, modifier = Modifier.size(19.dp))
+                Spacer(Modifier.width(11.dp))
+                Text(
+                    "Workspace files are stored privately in Pandora's app storage.",
+                    color = Ink,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                )
+            }
+            Spacer(Modifier.height(22.dp))
+        }
+        Text(
+            "One-time setup · usually 2–5 minutes · internet required",
+            color = Muted,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 10.dp),
+        )
+        OnboardingPrimaryAction(
+            label = if (continuing) "Continue setup" else "Set up Pandora",
+            onClick = onStart,
+        )
+    }
+}
+
+@Composable
+private fun OnboardingSetupProgress(detail: String) {
+    val steps = listOf(
+        "Create your private workspace",
+        "Add developer tools",
+        "Install Codex and terminals",
+        "Finish and open Pandora",
+    )
+    val stage = when {
+        detail.contains("SSL", ignoreCase = true) || detail.contains("utilities", ignoreCase = true) -> 1
+        detail.contains("terminal", ignoreCase = true) || detail.contains("Codex", ignoreCase = true) -> 2
+        detail.contains("container", ignoreCase = true) || detail.contains("Starting", ignoreCase = true) -> 3
+        else -> 0
+    }
+    val friendlyDetail = when {
+        detail.contains("Debian", ignoreCase = true) -> "Creating a private workspace on this device"
+        detail.contains("SSL", ignoreCase = true) || detail.contains("utilities", ignoreCase = true) ->
+            "Adding Git, Node.js, and essential command-line tools"
+        detail.contains("terminal", ignoreCase = true) -> "Enabling terminal sessions that survive navigation"
+        detail.contains("Codex", ignoreCase = true) -> "Installing the Codex agent"
+        detail.contains("container", ignoreCase = true) || detail.contains("Starting", ignoreCase = true) ->
+            "Running final checks"
+        else -> "Preparing secure local storage"
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+    ) {
+        OnboardingBrand()
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            Text(
+                "Building your workspace",
+                color = Ink,
+                fontSize = 29.sp,
+                lineHeight = 34.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Keep Pandora open and connected while the first-time setup finishes.",
+                color = Muted,
+                fontSize = 15.sp,
+                lineHeight = 22.sp,
+            )
+            Spacer(Modifier.height(30.dp))
+            Text(
+                "Step ${stage + 1} of ${steps.size}",
+                color = Accent,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(10.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .background(SoftSurface, CircleShape),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth((stage + 0.45f) / steps.size)
+                        .height(6.dp)
+                        .background(Accent, CircleShape),
+                )
+            }
+            Spacer(Modifier.height(11.dp))
+            Text(
+                friendlyDetail,
+                color = Muted,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(18.dp))
+            Column(
+                Modifier.semantics {
+                    liveRegion = LiveRegionMode.Polite
+                    stateDescription = friendlyDetail
+                },
+            ) {
+                steps.forEachIndexed { index, label ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.size(28.dp).background(
+                                when {
+                                    index < stage -> Accent
+                                    index == stage -> AccentSurface
+                                    else -> SoftSurface
+                                },
+                                CircleShape,
+                            ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            when {
+                                index < stage -> Icon(
+                                    Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                index == stage -> CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    color = Accent,
+                                    strokeWidth = 2.dp,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(13.dp))
+                        Text(
+                            label,
+                            color = if (index <= stage) Ink else Muted,
+                            fontSize = 14.sp,
+                            fontWeight = if (index == stage) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        }
+        Text(
+            "Everything is installed inside Pandora. Android itself is not modified.",
+            color = Muted,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+        )
+    }
+}
+
+@Composable
+private fun OnboardingReady(onSignIn: () -> Unit, onExplore: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+    ) {
+        OnboardingBrand()
+        Column(
+            Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Box(
+                Modifier.size(76.dp).background(Accent, RoundedCornerShape(24.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(38.dp),
+                )
+            }
+            Spacer(Modifier.height(28.dp))
+            Text(
+                "Your workspace is ready.",
+                color = Ink,
+                fontSize = 32.sp,
+                lineHeight = 37.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Connect your ChatGPT account so Codex can start working with your projects.",
+                color = Muted,
+                fontSize = 16.sp,
+                lineHeight = 23.sp,
+            )
+            Spacer(Modifier.height(26.dp))
+            Row(verticalAlignment = Alignment.Top) {
+                Icon(Icons.Rounded.Lock, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Sign-in opens in your browser. Your password is never entered in Pandora.",
+                    color = Muted,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                )
+            }
+        }
+        OnboardingPrimaryAction(label = "Sign in with ChatGPT", onClick = onSignIn)
+        TextButton(
+            onClick = onExplore,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) {
+            Text("Explore Pandora first", color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun OnboardingFailure(detail: String, onRetry: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+    ) {
+        OnboardingBrand()
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            Box(
+                Modifier.size(68.dp).background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(22.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Terminal,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(31.dp),
+                )
+            }
+            Spacer(Modifier.height(26.dp))
+            Text("Setup paused", color = Ink, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(10.dp))
+            Text(detail, color = Muted, fontSize = 15.sp, lineHeight = 22.sp)
+            Spacer(Modifier.height(14.dp))
+            Text(
+                "Your progress is saved. Connect to the internet and continue when you're ready.",
+                color = Muted,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+            )
+        }
+        OnboardingPrimaryAction(label = "Try setup again", onClick = onRetry)
+    }
+}
+
+@Composable
+private fun OnboardingBrand() {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier.size(34.dp).background(Ink, RoundedCornerShape(11.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = Paper, modifier = Modifier.size(17.dp))
+        }
+        Spacer(Modifier.width(10.dp))
+        Text("Pandora", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun OnboardingHeroMark() {
+    Box(Modifier.size(90.dp)) {
+        Box(
+            Modifier.size(82.dp).background(Terminal, RoundedCornerShape(25.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Terminal, contentDescription = null, tint = TerminalText, modifier = Modifier.size(39.dp))
+        }
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .size(36.dp)
+                .background(Accent, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Rounded.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun OnboardingValueRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    detail: String,
+) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.Top) {
+        Box(
+            Modifier.size(38.dp).background(AccentSurface, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = Accent, modifier = Modifier.size(19.dp))
+        }
+        Spacer(Modifier.width(13.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(3.dp))
+            Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+        }
+    }
+}
+
+@Composable
+private fun OnboardingPrimaryAction(label: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .background(Ink, RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 15.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(label, color = Paper, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.width(9.dp))
+        Icon(
+            Icons.AutoMirrored.Rounded.ArrowForward,
+            contentDescription = null,
+            tint = Paper,
+            modifier = Modifier.size(19.dp),
+        )
+    }
+}
+
+@Composable
 private fun HomeScreen(
     sessions: List<ManagedTerminalSession>,
     @Suppress("UNUSED_PARAMETER") revision: Long,
@@ -301,6 +781,7 @@ private fun HomeScreen(
     onDeletePersistentTerminal: (String) -> Unit,
     onOpenPersistentTerminal: (String) -> Unit,
     onSettings: () -> Unit,
+    onCodexLogin: () -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
     val chatCatalog = remember(context) { CodexThreadCatalog(context) }
@@ -533,7 +1014,11 @@ private fun HomeScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.weight(1f)) {
-                CodexLimitsFooter(state = limitState, onRefresh = { limitRefresh++ })
+                CodexLimitsFooter(
+                    state = limitState,
+                    onRefresh = { limitRefresh++ },
+                    onSignIn = onCodexLogin,
+                )
             }
             Spacer(Modifier.width(12.dp))
             Row(
@@ -975,19 +1460,55 @@ private fun ProjectMenuItem(
 
 @Composable
 private fun EmptyProjectsRow(loading: Boolean, onAddProject: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(SoftSurface, RoundedCornerShape(14.dp))
-            .clickable(enabled = !loading, onClick = onAddProject)
-            .padding(horizontal = 14.dp, vertical = 13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.Folder, contentDescription = null, tint = Muted, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(if (loading) "Loading projects…" else "Add your first project", color = Ink, fontSize = 14.sp)
-            if (!loading) Text("Choose a folder, create one, or clone a repository.", color = Muted, fontSize = 12.sp)
+    if (loading) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(Modifier.size(18.dp), color = Accent, strokeWidth = 2.dp)
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text("Opening your workspace…", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(2.dp))
+                Text("Loading projects and recent chats", color = Muted, fontSize = 12.sp)
+            }
+        }
+    } else {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(SoftSurface, RoundedCornerShape(16.dp))
+                .clickable(onClick = onAddProject)
+                .padding(18.dp),
+        ) {
+            Box(
+                Modifier.size(42.dp).background(AccentSurface, RoundedCornerShape(13.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Folder, contentDescription = null, tint = Accent, modifier = Modifier.size(21.dp))
+            }
+            Spacer(Modifier.height(16.dp))
+            Text("Bring in your first project", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Choose a folder, create a clean workspace, or clone a GitHub repository. Chats stay organized with the code they belong to.",
+                color = Muted,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Add a project", color = Accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowForward,
+                    contentDescription = null,
+                    tint = Accent,
+                    modifier = Modifier.size(17.dp),
+                )
+            }
         }
     }
 }
@@ -1789,10 +2310,14 @@ private fun formatRelativeTime(timestamp: Long): String {
 }
 
 @Composable
-private fun CodexLimitsFooter(state: CodexLimitsState, onRefresh: () -> Unit) {
+private fun CodexLimitsFooter(
+    state: CodexLimitsState,
+    onRefresh: () -> Unit,
+    onSignIn: () -> Unit,
+) {
     val (color, label) = when (state) {
         CodexLimitsState.Loading -> Accent to "Checking Codex limits…"
-        CodexLimitsState.SignedOut -> Muted to "Sign in to see Codex limits"
+        CodexLimitsState.SignedOut -> Accent to "Sign in to Codex"
         CodexLimitsState.Unavailable -> Color(0xFFD18B27) to "Codex limits unavailable · tap to retry"
         is CodexLimitsState.Available -> {
             val lowest = minOf(state.primary.remainingPercent, state.secondary?.remainingPercent ?: 100)
@@ -1809,7 +2334,7 @@ private fun CodexLimitsFooter(state: CodexLimitsState, onRefresh: () -> Unit) {
     Row(
         modifier = Modifier
             .heightIn(min = 48.dp)
-            .clickable(onClick = onRefresh),
+            .clickable(onClick = if (state is CodexLimitsState.SignedOut) onSignIn else onRefresh),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(7.dp).background(color, CircleShape))

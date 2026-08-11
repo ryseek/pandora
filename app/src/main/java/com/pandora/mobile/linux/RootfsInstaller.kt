@@ -21,6 +21,11 @@ class RootfsInstaller(private val context: Context) {
     private val marker = File(rootfs, ".pandora-rootfs-v2")
     private val defaultPackagesMarker = File(rootfs, ".pandora-default-packages-v3")
 
+    fun isSetupComplete(): Boolean =
+        marker.isFile &&
+            defaultPackagesMarker.isFile &&
+            File(workspace, ".local/bin/codex").exists()
+
     fun installIfNeeded(onStatus: (String) -> Unit) {
         synchronized(INSTALL_LOCK) {
             tempDir.mkdirs()
@@ -120,14 +125,21 @@ class RootfsInstaller(private val context: Context) {
 
         onStatus("Installing Codex…")
         ensureLocalBinOnPath()
+        val npmCache = File(rootfs, "tmp/pandora-npm-cache")
+        if (npmCache.exists()) npmCache.deleteRecursively()
+        File(workspace, ".npm/_cacache").takeIf(File::exists)?.deleteRecursively()
         val command = containerCommand(
             "/usr/bin/npm",
             "install",
             "--global",
             "--prefix", "/root/.local",
+            "--cache", "/tmp/pandora-npm-cache",
+            "--no-audit",
+            "--no-fund",
             "@openai/codex",
         )
         val (exitCode, output) = runContainerCommand(command)
+        if (npmCache.exists()) npmCache.deleteRecursively()
         if (exitCode != 0 || !codex.exists()) {
             // Codex remains absent rather than blocking offline startup. Its
             // existence check retries the install on the next container launch.

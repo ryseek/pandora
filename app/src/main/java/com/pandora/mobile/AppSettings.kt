@@ -15,6 +15,7 @@ object AppSettings {
     private const val REFINE_DICTATION_WITH_WHISPER = "refine_dictation_with_whisper"
     private const val TEXT_TO_SPEECH_MODEL = "text_to_speech_model"
     private const val SPEAK_ASSISTANT_RESPONSES = "speak_assistant_responses"
+    private const val ONBOARDING_COMPLETED = "onboarding_completed"
 
     enum class ThemePreference { SYSTEM, LIGHT, DARK }
 
@@ -98,5 +99,14 @@ object AppSettings {
     fun setSpeakAssistantResponses(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit().putBoolean(SPEAK_ASSISTANT_RESPONSES, enabled).apply()
+    }
+
+    fun onboardingCompleted(context: Context): Boolean =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(ONBOARDING_COMPLETED, false)
+
+    fun setOnboardingCompleted(context: Context, completed: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(ONBOARDING_COMPLETED, completed).apply()
     }
 }
