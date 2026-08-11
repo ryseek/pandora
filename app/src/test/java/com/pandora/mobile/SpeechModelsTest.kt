@@ -32,7 +32,15 @@ class SpeechModelsTest {
         assertNotNull(tts)
         assertEquals(SpeechModelTier.COMPACT, stt?.tier)
         assertEquals(SpeechModelTier.COMPACT, tts?.tier)
-        assertTrue(stt!!.downloadBytes < 110L * 1024 * 1024)
+        assertTrue(stt!!.downloadBytes < 60L * 1024 * 1024)
         assertTrue(tts!!.downloadBytes < 25L * 1024 * 1024)
+    }
+
+    @Test
+    fun dictationCatalogContainsOnlyTheNewLiveAndWhisperModels() {
+        val dictationModels = SpeechModels.all.filter { it.kind == SpeechModelKind.SPEECH_TO_TEXT }
+        assertEquals(setOf(SpeechModels.DEFAULT_STT_ID, SpeechModels.WHISPER_TINY_ID), dictationModels.map { it.id }.toSet())
+        assertEquals("zipformer-en-kroko", SpeechModels.find(SpeechModels.DEFAULT_STT_ID)?.engine)
+        assertTrue(SpeechModels.find(SpeechModels.WHISPER_TINY_ID)?.retainOnlyRequiredFiles == true)
     }
 }

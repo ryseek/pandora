@@ -35,6 +35,10 @@ class SpeechModelManager(context: Context) {
     private val _states = MutableStateFlow(readStates())
     val states: StateFlow<Map<String, SpeechModelDownload>> = _states.asStateFlow()
 
+    init {
+        LEGACY_STT_IDS.forEach { File(root, it).deleteRecursively() }
+    }
+
     fun state(modelId: String): SpeechModelDownload =
         _states.value[modelId] ?: SpeechModelDownload.NotInstalled
 
@@ -117,7 +121,15 @@ class SpeechModelManager(context: Context) {
                 }
             }
             connection.disconnect()
-            extractArchive(archive, staging)
+            extractArchive(
+                archive = archive,
+                destination = staging,
+                retainedEntries = if (model.retainOnlyRequiredFiles) {
+                    model.requiredFiles.mapTo(mutableSetOf()) { "${model.archiveRoot}/$it" }
+                } else {
+                    null
+                },
+            )
             val extractedRoot = File(staging, model.archiveRoot)
             check(extractedRoot.isDirectory) { "The downloaded model has an unexpected layout" }
             check(model.requiredFiles.all { File(extractedRoot, it).isFile }) {
@@ -132,26 +144,40 @@ class SpeechModelManager(context: Context) {
         }
     }
 
-    private fun extractArchive(archive: File, destination: File) {
+    private fun extractArchive(
+        archive: File,
+        destination: File,
+        retainedEntries: Set<String>?,
+    ) {
         TarArchiveInputStream(
             BZip2CompressorInputStream(BufferedInputStream(archive.inputStream())),
         ).use { tar ->
             var entry = tar.nextEntry
             val destinationPath = destination.canonicalPath + File.separator
             while (entry != null) {
-                val output = File(destination, entry.name)
+                val entryName = entry.name.removePrefix("./")
+                val output = File(destination, entryName)
                 check(output.canonicalPath.startsWith(destinationPath)) { "Unsafe path in model archive" }
                 when {
                     entry.isDirectory -> output.mkdirs()
                     entry.isSymbolicLink || entry.isLink -> Unit
-                    else -> {
+                    retainedEntries == null || entryName in retainedEntries -> {
                         output.parentFile?.mkdirs()
                         FileOutputStream(output).use { tar.copyTo(it) }
                     }
+                    else -> Unit
                 }
                 entry = tar.nextEntry
             }
         }
+    }
+
+    private companion object {
+        val LEGACY_STT_IDS = listOf(
+            "zipformer-en-20m-mobile",
+            "zipformer-en-balanced",
+            "zipformer-de-kroko",
+        )
     }
 }
 

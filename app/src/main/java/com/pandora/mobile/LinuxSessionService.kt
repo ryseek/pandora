@@ -41,6 +41,15 @@ class LinuxSessionService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        (application as? PandoraApplication)?.let { app ->
+            app.chatSessions.stopAll()
+            app.terminalSessions.stopAll()
+        }
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     companion object {
         private const val CHANNEL_ID = "linux_session"
         private const val NOTIFICATION_ID = 4102

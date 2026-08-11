@@ -30,6 +30,8 @@ import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
@@ -91,7 +93,10 @@ fun SettingsScreen(
     val application = context.applicationContext as PandoraApplication
     val speechManager = application.speechModels
     val speechStates by speechManager.states.collectAsState()
+    val dictationDiagnostics by application.onDeviceSpeech.diagnostics.collectAsState()
     var selectedStt by remember { mutableStateOf(AppSettings.speechToTextModel(context)) }
+    var dictationProcessor by remember { mutableStateOf(AppSettings.dictationProcessor(context)) }
+    var refineWithWhisper by remember { mutableStateOf(AppSettings.refineDictationWithWhisper(context)) }
     var selectedTts by remember { mutableStateOf(AppSettings.textToSpeechModel(context)) }
     var autoSpeak by remember { mutableStateOf(AppSettings.speakAssistantResponses(context)) }
     var backupBusy by remember { mutableStateOf(false) }
@@ -145,6 +150,10 @@ fun SettingsScreen(
 
     fun deleteSpeechModel(model: SpeechModel) {
         if (!speechManager.delete(model)) return
+        if (model.id == SpeechModels.WHISPER_TINY_ID) {
+            refineWithWhisper = false
+            AppSettings.setRefineDictationWithWhisper(context, false)
+        }
         val fallback = SpeechModels.all.firstOrNull {
             it.kind == model.kind && it.id != model.id && speechManager.isInstalled(it)
         }
@@ -228,6 +237,57 @@ fun SettingsScreen(
                 lineHeight = 18.sp,
             )
             Spacer(Modifier.height(18.dp))
+            Text("Dictation processor", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (dictationProcessor == AppSettings.DictationProcessor.CPU) {
+                    "Most compatible · two inference threads"
+                } else {
+                    "Android NNAPI · acceleration depends on device support"
+                },
+                color = SettingsMuted,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier.fillMaxWidth().background(SettingsSoftSurface, RoundedCornerShape(14.dp)).padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ThemeChoice(
+                    label = "CPU",
+                    selected = dictationProcessor == AppSettings.DictationProcessor.CPU,
+                    icon = { tint -> Icon(Icons.Rounded.Memory, null, tint = tint, modifier = Modifier.size(17.dp)) },
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        dictationProcessor = AppSettings.DictationProcessor.CPU
+                        AppSettings.setDictationProcessor(context, dictationProcessor)
+                    },
+                )
+                ThemeChoice(
+                    label = "GPU",
+                    selected = dictationProcessor == AppSettings.DictationProcessor.GPU,
+                    icon = { tint -> Icon(Icons.Rounded.Speed, null, tint = tint, modifier = Modifier.size(17.dp)) },
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        dictationProcessor = AppSettings.DictationProcessor.GPU
+                        AppSettings.setDictationProcessor(context, dictationProcessor)
+                    },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                dictationDiagnosticsLabel(dictationDiagnostics),
+                color = if (dictationDiagnostics.droppedAudioMillis > 0) {
+                    androidx.compose.material3.MaterialTheme.colorScheme.error
+                } else {
+                    SettingsMuted
+                },
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+            )
+
+            Spacer(Modifier.height(22.dp))
             Text("Dictation model", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(10.dp))
             SpeechModels.all.filter { it.kind == SpeechModelKind.SPEECH_TO_TEXT }.forEach { model ->
@@ -240,13 +300,51 @@ fun SettingsScreen(
                         AppSettings.setSpeechToTextModel(context, model.id)
                     },
                     onDownload = {
-                        selectedStt = model.id
-                        AppSettings.setSpeechToTextModel(context, model.id)
                         speechManager.download(model)
                     },
                     onDelete = { deleteSpeechModel(model) },
                 )
                 Spacer(Modifier.height(10.dp))
+            }
+
+            val whisperInstalled = speechStates[SpeechModels.WHISPER_TINY_ID] is SpeechModelDownload.Installed
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = whisperInstalled) {
+                        refineWithWhisper = !refineWithWhisper
+                        AppSettings.setRefineDictationWithWhisper(context, refineWithWhisper)
+                    }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                    Text(
+                        "Refine final transcript with Whisper",
+                        color = if (whisperInstalled) SettingsInk else SettingsMuted,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        if (whisperInstalled) {
+                            "Keep Kroko's live text, then improve it after you stop recording."
+                        } else {
+                            "Download Whisper Tiny above to enable the optional second pass."
+                        },
+                        color = SettingsMuted,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                    )
+                }
+                Switch(
+                    checked = refineWithWhisper && whisperInstalled,
+                    onCheckedChange = { enabled ->
+                        refineWithWhisper = enabled
+                        AppSettings.setRefineDictationWithWhisper(context, enabled)
+                    },
+                    enabled = whisperInstalled,
+                )
             }
 
             Spacer(Modifier.height(12.dp))
@@ -652,6 +750,26 @@ private fun SpeechModelRow(
             Spacer(Modifier.height(7.dp))
             Text(state.detail, color = androidx.compose.material3.MaterialTheme.colorScheme.error, fontSize = 12.sp)
         }
+    }
+}
+
+private fun dictationDiagnosticsLabel(diagnostics: DictationDiagnostics): String {
+    val realTimeFactor = diagnostics.realTimeFactor
+        ?: return "No performance measurement yet · run dictation to test this device."
+    return buildString {
+        append(if (diagnostics.active) "Live" else "Last")
+        append(" ${diagnostics.processor.name} run · ")
+        append(String.format(Locale.US, "%.2f× realtime", realTimeFactor))
+        append(" · ")
+        if (diagnostics.droppedAudioMillis == 0L) {
+            append("no audio dropped")
+        } else {
+            append("${diagnostics.droppedAudioMillis} ms dropped")
+        }
+        if (diagnostics.active && diagnostics.bufferedAudioMillis > 0) {
+            append(" · ${diagnostics.bufferedAudioMillis} ms queued")
+        }
+        append(" · lower is better")
     }
 }
 

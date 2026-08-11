@@ -16,64 +16,47 @@ data class SpeechModel(
     val archiveRoot: String,
     val requiredFiles: List<String>,
     val engine: String,
+    val retainOnlyRequiredFiles: Boolean = false,
 )
 
 object SpeechModels {
-    const val DEFAULT_STT_ID = "zipformer-en-20m-mobile"
+    const val DEFAULT_STT_ID = "zipformer-en-kroko"
+    const val WHISPER_TINY_ID = "whisper-tiny-en-int8"
     const val DEFAULT_TTS_ID = "piper-amy-en-int8"
 
     val all = listOf(
         SpeechModel(
             id = DEFAULT_STT_ID,
             kind = SpeechModelKind.SPEECH_TO_TEXT,
-            name = "English · Compact",
+            name = "Kroko · Live",
             language = "English (US)",
-            description = "Fast streaming dictation with the smallest memory footprint.",
+            description = "Immediate partial text while you speak. Best for quick dictation.",
             tier = SpeechModelTier.COMPACT,
-            downloadBytes = 107_569_151,
+            downloadBytes = 57_267_600,
             downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/" +
-                "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17-mobile.tar.bz2",
-            archiveRoot = "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17-mobile",
-            requiredFiles = listOf(
-                "encoder-epoch-99-avg-1.int8.onnx",
-                "decoder-epoch-99-avg-1.onnx",
-                "joiner-epoch-99-avg-1.int8.onnx",
-                "tokens.txt",
-            ),
-            engine = "zipformer-en-20m-mobile",
-        ),
-        SpeechModel(
-            id = "zipformer-en-balanced",
-            kind = SpeechModelKind.SPEECH_TO_TEXT,
-            name = "English · Balanced",
-            language = "English (US)",
-            description = "Higher accuracy, but slower to load and heavier on memory.",
-            tier = SpeechModelTier.BALANCED,
-            downloadBytes = 310_414_022,
-            downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/" +
-                "sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
-            archiveRoot = "sherpa-onnx-streaming-zipformer-en-2023-06-26",
-            requiredFiles = listOf(
-                "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
-                "decoder-epoch-99-avg-1-chunk-16-left-128.onnx",
-                "joiner-epoch-99-avg-1-chunk-16-left-128.onnx",
-                "tokens.txt",
-            ),
-            engine = "zipformer-en-balanced",
-        ),
-        SpeechModel(
-            id = "zipformer-de-kroko",
-            kind = SpeechModelKind.SPEECH_TO_TEXT,
-            name = "German · Compact",
-            language = "German",
-            description = "Small streaming German model with a light download footprint.",
-            tier = SpeechModelTier.COMPACT,
-            downloadBytes = 57_565_698,
-            downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/" +
-                "sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06.tar.bz2",
-            archiveRoot = "sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06",
+                "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06.tar.bz2",
+            archiveRoot = "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
             requiredFiles = listOf("encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"),
-            engine = "zipformer-de-kroko",
+            engine = "zipformer-en-kroko",
+        ),
+        SpeechModel(
+            id = WHISPER_TINY_ID,
+            kind = SpeechModelKind.SPEECH_TO_TEXT,
+            name = "Whisper Tiny · Accurate",
+            language = "English (US)",
+            description = "More accurate final text after recording stops. Can also refine Kroko.",
+            tier = SpeechModelTier.BALANCED,
+            downloadBytes = 118_071_777,
+            downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/" +
+                "sherpa-onnx-whisper-tiny.en.tar.bz2",
+            archiveRoot = "sherpa-onnx-whisper-tiny.en",
+            requiredFiles = listOf(
+                "tiny.en-encoder.int8.onnx",
+                "tiny.en-decoder.int8.onnx",
+                "tiny.en-tokens.txt",
+            ),
+            engine = "whisper-tiny-en-int8",
+            retainOnlyRequiredFiles = true,
         ),
         SpeechModel(
             id = DEFAULT_TTS_ID,

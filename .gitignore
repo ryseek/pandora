@@ -3,3 +3,7 @@
 local.properties
 **/build/
 *.iml
+.DS_Store
+.codex/
+.kotlin/
+voice-samples/

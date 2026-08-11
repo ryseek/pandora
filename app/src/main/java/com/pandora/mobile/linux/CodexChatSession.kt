@@ -1,7 +1,6 @@
 package com.pandora.mobile.linux
 
 import android.content.Context
-import com.pandora.mobile.LinuxSessionService
 import java.io.BufferedWriter
 import java.io.File
 import java.util.UUID
@@ -49,6 +48,7 @@ sealed interface CodexChatState {
  */
 class CodexChatSession(
     context: Context,
+    val id: String,
     private val resumeThreadId: String? = null,
     private val cwd: String = "/root",
 ) {
@@ -84,7 +84,6 @@ class CodexChatSession(
         get() = threadId ?: resumeThreadId
 
     init {
-        LinuxSessionService.setChatActive(appContext, true)
         scope.launch { start() }
     }
 
@@ -128,7 +127,6 @@ class CodexChatSession(
         writer = null
         _state.value = CodexChatState.Closed
         scope.cancel()
-        LinuxSessionService.setChatActive(appContext, false)
     }
 
     private fun start() {
@@ -140,8 +138,6 @@ class CodexChatSession(
             check(File(installer.workspace, ".local/bin/codex").exists()) {
                 "Codex CLI is not installed yet. Open a Linux session while online to retry installation."
             }
-
-            installer.terminateStaleCodexAppServers()
 
             val command = installer.containerCommand("/root/.local/bin/codex", "app-server")
             val child = installer.startContainerProcess(command, mergeError = false)
@@ -353,7 +349,6 @@ class CodexChatSession(
         process?.let(installer::terminateProcessTree)
         writer = null
         process = null
-        LinuxSessionService.setChatActive(appContext, false)
     }
 
     private fun sendRequest(id: Int, method: String, params: JSONObject): Boolean =

@@ -161,9 +161,11 @@ private fun PandoraApp() {
     val chatManager = context.chatSessions
     val sessions by sessionManager.sessions.collectAsState()
     val sessionRevision by sessionManager.revision.collectAsState()
+    val chatSessions by chatManager.sessions.collectAsState()
     var screen by remember { mutableStateOf(Screen.Home) }
     var settingsReturnScreen by remember { mutableStateOf(Screen.Home) }
     var selectedSessionId by remember { mutableStateOf<String?>(null) }
+    var selectedChatSessionId by remember { mutableStateOf<String?>(null) }
     var themePreference by remember { mutableStateOf(AppSettings.theme(context)) }
     PandoraTheme(themePreference) {
         Surface(color = Paper, modifier = Modifier.fillMaxSize()) {
@@ -176,14 +178,16 @@ private fun PandoraApp() {
                     Screen.Home -> HomeScreen(
                         sessions = sessions,
                         revision = sessionRevision,
+                        chatSessions = chatSessions,
                         onNewChat = { cwd ->
-                            chatManager.create(cwd = cwd ?: "/root")
+                            selectedChatSessionId = chatManager.create(cwd = cwd ?: "/root").id
                             screen = Screen.Chat
                         },
                         onOpenChat = { threadId, cwd ->
-                            chatManager.create(threadId, cwd)
+                            selectedChatSessionId = chatManager.create(threadId, cwd).id
                             screen = Screen.Chat
                         },
+                        onStopChat = chatManager::stopThread,
                         onNewTerminal = {
                             selectedSessionId = sessionManager.create().id
                             screen = Screen.Container
@@ -214,7 +218,7 @@ private fun PandoraApp() {
                         },
                     )
                     Screen.Chat -> {
-                        val chat = chatManager.current
+                        val chat = chatManager.find(selectedChatSessionId)
                         if (chat == null) {
                             LaunchedEffect(Unit) { screen = Screen.Home }
                         } else {
@@ -265,7 +269,10 @@ private fun PandoraApp() {
                             selectedSessionId = sessionManager.create("codex login").id
                             screen = Screen.Container
                         },
-                        onStopAllForRepair = { sessionManager.stopAll() },
+                        onStopAllForRepair = {
+                            chatManager.stopAll()
+                            sessionManager.stopAll()
+                        },
                     )
                 }
             }
@@ -277,8 +284,10 @@ private fun PandoraApp() {
 private fun HomeScreen(
     sessions: List<ManagedTerminalSession>,
     @Suppress("UNUSED_PARAMETER") revision: Long,
+    chatSessions: List<CodexChatSession>,
     onNewChat: (String?) -> Unit,
     onOpenChat: (String, String) -> Unit,
+    onStopChat: (String) -> Unit,
     onNewTerminal: () -> Unit,
     onOpenTerminal: (ManagedTerminalSession) -> Unit,
     onRestartTerminal: (ManagedTerminalSession) -> Unit,
@@ -449,8 +458,10 @@ private fun HomeScreen(
                     items(projectEntries, key = { it.key }) { entry ->
                         WorkspaceEntryRow(
                             entry = entry,
+                            chatSessions = chatSessions,
                             nested = true,
                             onOpenChat = onOpenChat,
+                            onStopChat = onStopChat,
                             onOpenTerminal = onOpenTerminal,
                             onRestartTerminal = onRestartTerminal,
                             onOpenPersistentTerminal = onOpenPersistentTerminal,
@@ -475,7 +486,9 @@ private fun HomeScreen(
                 items(otherEntries, key = { it.key }) { entry ->
                     WorkspaceEntryRow(
                         entry = entry,
+                        chatSessions = chatSessions,
                         onOpenChat = onOpenChat,
+                        onStopChat = onStopChat,
                         onOpenTerminal = onOpenTerminal,
                         onRestartTerminal = onRestartTerminal,
                         onOpenPersistentTerminal = onOpenPersistentTerminal,
@@ -596,6 +609,7 @@ private fun HomeScreen(
                     actionInFlight = true
                     actionError = null
                     val projectChatIds = chats.filter { it.cwd == project.path }.map { it.id }
+                    projectChatIds.forEach(onStopChat)
                     val result = withContext(Dispatchers.IO) {
                         runCatching {
                             projectChatIds.forEach(chatCatalog::delete)
@@ -675,6 +689,7 @@ private fun HomeScreen(
                     is WorkspaceEntry.Chat -> actionScope.launch {
                         actionInFlight = true
                         actionError = null
+                        onStopChat(entry.chat.id)
                         val result = withContext(Dispatchers.IO) {
                             runCatching { chatCatalog.delete(entry.chat.id) }
                         }
@@ -1303,8 +1318,10 @@ private fun DeleteEntryDialog(
 @Composable
 private fun WorkspaceEntryRow(
     entry: WorkspaceEntry,
+    chatSessions: List<CodexChatSession>,
     nested: Boolean = false,
     onOpenChat: (String, String) -> Unit,
+    onStopChat: (String) -> Unit,
     onOpenTerminal: (ManagedTerminalSession) -> Unit,
     onRestartTerminal: (ManagedTerminalSession) -> Unit,
     onOpenPersistentTerminal: (String) -> Unit,
@@ -1313,13 +1330,24 @@ private fun WorkspaceEntryRow(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val isChat = entry is WorkspaceEntry.Chat
+    val chatSession = (entry as? WorkspaceEntry.Chat)?.let { chatEntry ->
+        chatSessions.firstOrNull { it.activeThreadId == chatEntry.chat.id }
+    }
+    val chatState = chatSession?.state?.collectAsState()?.value
     val title = when (entry) {
         is WorkspaceEntry.Chat -> entry.chat.title
         is WorkspaceEntry.TerminalSession -> entry.session.title
         is WorkspaceEntry.PersistentTerminal -> entry.name.removePrefix("pandora-").let { "Terminal $it" }
     }
     val subtitle = when (entry) {
-        is WorkspaceEntry.Chat -> entry.chat.preview.ifBlank { "Codex conversation" }
+        is WorkspaceEntry.Chat -> when (val current = chatState) {
+            is CodexChatState.Starting -> "Starting · ${current.detail}"
+            is CodexChatState.Running -> "Working · ${entry.chat.preview.ifBlank { "Codex is responding" }}"
+            is CodexChatState.Ready -> "Ready · ${entry.chat.preview.ifBlank { "Codex conversation" }}"
+            is CodexChatState.Failed -> "Failed · ${current.detail}"
+            CodexChatState.Closed -> "Stopped · ${entry.chat.preview.ifBlank { "Codex conversation" }}"
+            null -> "Stopped · ${entry.chat.preview.ifBlank { "Codex conversation" }}"
+        }
         is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
             PtyTerminalSession.State.PREPARING -> "Active · starting Linux…"
             PtyTerminalSession.State.RUNNING -> "Active"
@@ -1329,13 +1357,19 @@ private fun WorkspaceEntryRow(
         is WorkspaceEntry.PersistentTerminal -> "Active · detached · tap to reconnect"
     }
     val terminalActive = when (entry) {
-        is WorkspaceEntry.Chat -> null
+        is WorkspaceEntry.Chat -> when (chatState) {
+            is CodexChatState.Starting, is CodexChatState.Ready, is CodexChatState.Running -> true
+            is CodexChatState.Failed, CodexChatState.Closed, null -> false
+        }
         is WorkspaceEntry.PersistentTerminal -> true
         is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
             PtyTerminalSession.State.PREPARING, PtyTerminalSession.State.RUNNING -> true
             PtyTerminalSession.State.STOPPED, PtyTerminalSession.State.FAILED -> false
         }
     }
+    val chatIsActive = chatState is CodexChatState.Starting ||
+        chatState is CodexChatState.Ready ||
+        chatState is CodexChatState.Running
     Box(
         Modifier
             .fillMaxWidth()
@@ -1382,15 +1416,13 @@ private fun WorkspaceEntryRow(
             Text(title, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Spacer(Modifier.height(3.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (terminalActive != null) {
-                    Box(
-                        Modifier.size(7.dp).background(
-                            if (terminalActive) Color(0xFF55A76A) else MaterialTheme.colorScheme.outline,
-                            CircleShape,
-                        ),
-                    )
-                    Spacer(Modifier.width(7.dp))
-                }
+                Box(
+                    Modifier.size(7.dp).background(
+                        if (terminalActive) Color(0xFF55A76A) else MaterialTheme.colorScheme.outline,
+                        CircleShape,
+                    ),
+                )
+                Spacer(Modifier.width(7.dp))
                 Text(
                     subtitle,
                     color = Muted,
@@ -1404,7 +1436,20 @@ private fun WorkspaceEntryRow(
                 it.state.value == PtyTerminalSession.State.STOPPED ||
                     it.state.value == PtyTerminalSession.State.FAILED
             }
-            if (stoppedSession != null) {
+            if (entry is WorkspaceEntry.Chat && chatIsActive) {
+                Spacer(Modifier.width(10.dp))
+                IconButton(
+                    onClick = { onStopChat(entry.chat.id) },
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.Stop,
+                        contentDescription = "Stop ${entry.chat.title}",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            } else if (stoppedSession != null) {
                 Spacer(Modifier.width(10.dp))
                 Row(
                     modifier = Modifier
@@ -1467,6 +1512,27 @@ private fun WorkspaceEntryRow(
                     contentPadding = PaddingValues(horizontal = 10.dp),
                 )
                 Spacer(Modifier.height(2.dp))
+                if (entry is WorkspaceEntry.Chat && chatIsActive) {
+                    DropdownMenuItem(
+                        text = {
+                            Text("Stop", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Rounded.Stop,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onStopChat(entry.chat.id)
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                    )
+                    Spacer(Modifier.height(2.dp))
+                }
                 DropdownMenuItem(
                     text = {
                         Text(
@@ -1782,6 +1848,7 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
     val speech = application.onDeviceSpeech
     val speechModels = application.speechModels
     val dictation by speech.dictation.collectAsState()
+    val dictationDiagnostics by speech.diagnostics.collectAsState()
     val playback by speech.playback.collectAsState()
     var draft by remember { mutableStateOf("") }
     var dictationPrefix by remember { mutableStateOf("") }
@@ -1983,7 +2050,19 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
         }
         when (val current = dictation) {
             DictationState.Loading -> VoiceStatus("Loading dictation model…", active = true)
-            is DictationState.Listening -> VoiceStatus("Listening · tap the microphone to finish", active = true)
+            DictationState.Transcribing -> VoiceStatus("Whisper is refining the transcript…", active = true)
+            is DictationState.Listening -> VoiceStatus(
+                buildString {
+                    append("Listening · ${dictationDiagnostics.processor.name}")
+                    dictationDiagnostics.realTimeFactor?.let {
+                        append(" · ${String.format(Locale.US, "%.2f×", it)} realtime")
+                    }
+                    if (dictationDiagnostics.droppedAudioMillis > 0) {
+                        append(" · ${dictationDiagnostics.droppedAudioMillis} ms dropped")
+                    }
+                },
+                active = true,
+            )
             is DictationState.Failed -> VoiceStatus(current.detail, active = false)
             else -> Unit
         }
@@ -2035,15 +2114,19 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
                         beginDictation()
                     }
                 },
-                enabled = ready,
+                enabled = ready && dictation !is DictationState.Transcribing,
                 modifier = Modifier.size(48.dp),
             ) {
-                Icon(
-                    if (dictation is DictationState.Loading || dictation is DictationState.Listening) Icons.Rounded.Stop else Icons.Rounded.MicNone,
-                    contentDescription = if (dictation is DictationState.Loading || dictation is DictationState.Listening) "Stop dictation" else "Start dictation",
-                    tint = if (dictation is DictationState.Loading || dictation is DictationState.Listening) MaterialTheme.colorScheme.error else Accent,
-                    modifier = Modifier.size(21.dp),
-                )
+                if (dictation is DictationState.Transcribing) {
+                    CircularProgressIndicator(Modifier.size(20.dp), color = Accent, strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        if (dictation is DictationState.Loading || dictation is DictationState.Listening) Icons.Rounded.Stop else Icons.Rounded.MicNone,
+                        contentDescription = if (dictation is DictationState.Loading || dictation is DictationState.Listening) "Stop dictation" else "Start dictation",
+                        tint = if (dictation is DictationState.Loading || dictation is DictationState.Listening) MaterialTheme.colorScheme.error else Accent,
+                        modifier = Modifier.size(21.dp),
+                    )
+                }
             }
             Box(
                 Modifier
@@ -2070,7 +2153,7 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
             text = {
                 Text(
                     if (dictationMissing) {
-                        "On-device dictation needs a one-time model download. The compact default is about 103 MB and stays private on this phone."
+                        "On-device dictation needs a one-time model download. The live default is about 55 MB and stays private on this phone."
                     } else {
                         "On-device reading needs a one-time voice download. The compact default is about 20 MB."
                     },
