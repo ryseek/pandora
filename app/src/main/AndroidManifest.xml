@@ -10,7 +10,7 @@
 
     <application
         android:name=".PandoraApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/app_icon"
         android:label="Pandora"
         android:supportsRtl="true"

@@ -1969,13 +1969,19 @@ private fun RemoveEntryDialog(
     onDismiss: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    val terminalState = (entry as? WorkspaceEntry.TerminalSession)
+        ?.session
+        ?.state
+        ?.collectAsState()
+        ?.value
     val detail = when (entry) {
         is WorkspaceEntry.Chat -> "This hides the conversation from Home. You can restore it anytime from Settings → Archive."
-        is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
+        is WorkspaceEntry.TerminalSession -> when (terminalState) {
             PtyTerminalSession.State.PREPARING, PtyTerminalSession.State.RUNNING ->
                 "This ends the running shell and removes its terminal output. Files in /root remain saved."
             PtyTerminalSession.State.STOPPED, PtyTerminalSession.State.FAILED ->
                 "This removes the stopped session and its terminal output. Files in /root remain saved."
+            null -> "This removes the terminal session. Files in /root remain saved."
         }
         is WorkspaceEntry.PersistentTerminal ->
             "This ends the detached shell and removes it from Pandora. Files in /root remain saved."
@@ -2065,6 +2071,11 @@ private fun WorkspaceEntryRow(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val isChat = entry is WorkspaceEntry.Chat
+    val terminalState = (entry as? WorkspaceEntry.TerminalSession)
+        ?.session
+        ?.state
+        ?.collectAsState()
+        ?.value
     val chatSession = (entry as? WorkspaceEntry.Chat)?.let { chatEntry ->
         chatSessions.firstOrNull { it.activeThreadId == chatEntry.chat.id }
     }
@@ -2083,11 +2094,12 @@ private fun WorkspaceEntryRow(
             CodexChatState.Closed -> "Stopped · ${entry.chat.preview.ifBlank { "Codex conversation" }}"
             null -> "Stopped · ${entry.chat.preview.ifBlank { "Codex conversation" }}"
         }
-        is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
+        is WorkspaceEntry.TerminalSession -> when (terminalState) {
             PtyTerminalSession.State.PREPARING -> "Active · starting Linux…"
             PtyTerminalSession.State.RUNNING -> "Active"
             PtyTerminalSession.State.STOPPED -> "Stopped"
             PtyTerminalSession.State.FAILED -> "Stopped"
+            null -> "Stopped"
         }
         is WorkspaceEntry.PersistentTerminal -> "Active · detached · tap to reconnect"
     }
@@ -2097,9 +2109,9 @@ private fun WorkspaceEntryRow(
             is CodexChatState.Failed, CodexChatState.Closed, null -> false
         }
         is WorkspaceEntry.PersistentTerminal -> true
-        is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
+        is WorkspaceEntry.TerminalSession -> when (terminalState) {
             PtyTerminalSession.State.PREPARING, PtyTerminalSession.State.RUNNING -> true
-            PtyTerminalSession.State.STOPPED, PtyTerminalSession.State.FAILED -> false
+            PtyTerminalSession.State.STOPPED, PtyTerminalSession.State.FAILED, null -> false
         }
     }
     val chatIsActive = chatState is CodexChatState.Starting ||

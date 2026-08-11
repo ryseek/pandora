@@ -1,6 +1,7 @@
 package com.pandora.mobile
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -36,6 +37,9 @@ internal class AgentNotificationController(context: Context) {
         val cleanTitle = title.trim().ifEmpty { "Pandora" }.take(MAX_TITLE_LENGTH)
         val cleanMessage = message.trim().take(MAX_MESSAGE_LENGTH)
         if (cleanMessage.isEmpty()) return AgentNotificationResult(false, "message_required")
+        if (!AppSettings.agentNotificationsEnabled(appContext)) {
+            return AgentNotificationResult(false, "notifications_disabled")
+        }
         if (!notificationsAllowed()) return AgentNotificationResult(false, "notifications_disabled")
 
         val openPandora = PendingIntent.getActivity(
@@ -58,9 +62,16 @@ internal class AgentNotificationController(context: Context) {
             .build()
 
         return runCatching {
-            notifications.notify(nextId.getAndIncrement(), notification)
+            postNotification(notification)
             AgentNotificationResult(true)
         }.getOrElse { AgentNotificationResult(false, "notification_failed") }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun postNotification(notification: android.app.Notification) {
+        // send() checks the runtime permission immediately before this call. Keep the
+        // runCatching guard because Android can still revoke access between the two.
+        notifications.notify(nextId.getAndIncrement(), notification)
     }
 
     private fun notificationsAllowed(): Boolean {

@@ -7,3 +7,9 @@ local.properties
 .codex/
 .kotlin/
 voice-samples/
+*.jks
+*.keystore
+*.p12
+keystore.properties
+*.apk
+*.aab

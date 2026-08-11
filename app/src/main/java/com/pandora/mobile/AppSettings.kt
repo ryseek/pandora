@@ -18,6 +18,7 @@ object AppSettings {
     private const val ONBOARDING_COMPLETED = "onboarding_completed"
     private const val COLLAPSED_PROJECT_PATHS = "collapsed_project_paths"
     private const val ADB_PLUGIN_ENABLED = "adb_plugin_enabled"
+    private const val AGENT_NOTIFICATIONS_ENABLED = "agent_notifications_enabled"
 
     enum class ThemePreference { SYSTEM, LIGHT, DARK }
 
@@ -132,5 +133,14 @@ object AppSettings {
     fun setAdbPluginEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit().putBoolean(ADB_PLUGIN_ENABLED, enabled).apply()
+    }
+
+    fun agentNotificationsEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(AGENT_NOTIFICATIONS_ENABLED, false)
+
+    fun setAgentNotificationsEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(AGENT_NOTIFICATIONS_ENABLED, enabled).apply()
     }
 }

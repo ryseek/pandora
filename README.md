@@ -1,6 +1,14 @@
-# Pandora Android prototype
+# Pandora
 
-Pandora is an early Android prototype for a local, persistent AI-agent workspace.
+Pandora is a local, persistent AI-agent workspace for Android. It combines
+durable Codex chats, project-aware workspaces, and a real Debian terminal in a
+native Jetpack Compose app.
+
+> [!IMPORTANT]
+> Pandora is an early release for ARM64 Android devices. The embedded PRoot
+> environment is not a VM or a security boundary.
+
+![Pandora home, Codex chat, and Debian terminal](artifacts/pandora-screenshots.png)
 
 This milestone includes:
 
@@ -84,3 +92,7 @@ Speech models are not bundled in the APK. Choose and download them from Settings
 ## License
 
 Pandora is distributed under GPL-3.0-or-later. The bundled PRoot runtime is derived from the OpenMinis PRoot fork and is licensed under GPL-2.0. Debian packages retain their individual licenses. See `THIRD_PARTY_NOTICES.md`.
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), report
+security issues through the process in [SECURITY.md](SECURITY.md), and see
+[CHANGELOG.md](CHANGELOG.md) for release history.

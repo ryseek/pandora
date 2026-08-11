@@ -1,7 +1,9 @@
 package com.pandora.mobile
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -11,6 +13,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import androidx.core.content.ContextCompat
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
@@ -385,8 +388,8 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                     if (recorder === localRecorder) recorder = null
                 }
                 stream?.release()
-                    dictationModelInUse.set(false)
-                }
+                dictationModelInUse.set(false)
+            }
             }
         }
     }
@@ -475,8 +478,8 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                 localRecorder?.release()
                 synchronized(dictationLock) { if (recorder === localRecorder) recorder = null }
                 _diagnostics.value = _diagnostics.value.copy(active = false)
-                    dictationModelInUse.set(false)
-                }
+                dictationModelInUse.set(false)
+            }
             }
         }
     }
@@ -642,6 +645,10 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
     }
 
     private fun createAudioRecord(): AudioRecord {
+        check(
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        ) { "Microphone access is off. Allow it in Android Settings to use dictation." }
         val minBytes = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,

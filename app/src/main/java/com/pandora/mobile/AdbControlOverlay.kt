@@ -22,6 +22,7 @@ import android.view.MotionEvent
 import android.view.RoundedCorner
 import android.view.View
 import android.view.WindowInsets
+import androidx.annotation.RequiresApi
 import android.view.WindowManager
 
 /** Draws Pandora's safety frame above every app while phone control is active. */
@@ -189,6 +190,7 @@ private class ControlFrameView(context: Context) : View(context) {
         invalidate()
     }
 
+    @RequiresApi(Build.VERSION_CODES.S)
     private fun cornerRadius(insets: WindowInsets?, position: Int, pathInset: Float): Float {
         val systemRadius = insets?.getRoundedCorner(position)?.radius?.toFloat() ?: 0f
         return (systemRadius - pathInset).coerceAtLeast(0f)

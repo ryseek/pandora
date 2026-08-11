@@ -45,7 +45,7 @@ curl -fsS -X POST \
 
 `message` is required. `title` defaults to `Pandora`. Pandora limits titles to 80 characters and messages to 500 characters.
 
-The endpoint returns `notifications_disabled` when Android notification permission or the Agent updates channel is disabled. Agents must report that once in chat and must not repeatedly retry or open Android settings themselves.
+The endpoint returns `notifications_disabled` when Agent notifications is off in Pandora, Android notification permission is missing, or the Agent updates channel is disabled. Users control this under **Settings → Plugins → Agent notifications**. Agents must report the error once in chat and must not repeatedly retry or open Android settings themselves.
 
 Notifications are for meaningful asynchronous updates, not narration. Do not notify after every tool call, intermediate step, or ordinary chat response.
 
@@ -57,4 +57,3 @@ Notifications are for meaningful asynchronous updates, not narration. Do not not
 | `GET` | `/v1/status` | Read plugin, connection, and active-session state |
 | `POST` | `/v1/control/stop` | Remove the overlay and disconnect ADB |
 | `POST` | `/v1/notify` | Post a user-visible Android notification |
-

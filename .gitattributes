@@ -2,5 +2,6 @@
 *.bat text eol=crlf
 *.so binary
 *.tar binary
+*.tgz binary
 *.png binary
 *.jar binary

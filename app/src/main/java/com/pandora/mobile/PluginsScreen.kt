@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeveloperMode
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,6 +57,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -67,6 +69,40 @@ fun PluginsScreen(
     onOpenSetup: () -> Unit,
     onEnabledChange: (Boolean) -> Unit,
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var notificationOptIn by remember { mutableStateOf(AppSettings.agentNotificationsEnabled(context)) }
+    var notificationPermissionGranted by remember { mutableStateOf(hasNotificationPermission(context)) }
+    var systemNotificationsEnabled by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notificationPermissionGranted = granted || Build.VERSION.SDK_INT < 33
+        systemNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notificationOptIn = AppSettings.agentNotificationsEnabled(context)
+                notificationPermissionGranted = hasNotificationPermission(context)
+                systemNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val notificationsActive = notificationOptIn && notificationPermissionGranted && systemNotificationsEnabled
+    val notificationsBlocked = notificationOptIn && !notificationsActive
+    val onNotificationsChanged: (Boolean) -> Unit = { enabled ->
+        notificationOptIn = enabled
+        AppSettings.setAgentNotificationsEnabled(context, enabled)
+        if (enabled && !notificationPermissionGranted && Build.VERSION.SDK_INT >= 33) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (enabled && !systemNotificationsEnabled) {
+            openNotificationSettings(context)
+        }
+    }
+
     PluginPage(title = "Plugins", onBack = onBack) {
         Text(
             "Plugins ask before taking control of your device.",
@@ -126,6 +162,74 @@ fun PluginsScreen(
                 onEnabledChange(true)
                 onOpenSetup()
             }
+        }
+
+        Spacer(Modifier.height(32.dp))
+        AgentNotificationsSetting(
+            checked = notificationsActive,
+            blocked = notificationsBlocked,
+            onCheckedChange = onNotificationsChanged,
+            onOpenSettings = { openNotificationSettings(context) },
+        )
+    }
+}
+
+@Composable
+private fun AgentNotificationsSetting(
+    checked: Boolean,
+    blocked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialThemeColors.soft, RoundedCornerShape(15.dp))
+            .padding(horizontal = 16.dp, vertical = 15.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(42.dp).background(MaterialThemeColors.accentSurface, RoundedCornerShape(13.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.NotificationsNone,
+                    contentDescription = null,
+                    tint = MaterialThemeColors.accent,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Agent notifications",
+                    color = MaterialThemeColors.ink,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    if (blocked) "Blocked by Android settings" else "When work is ready or needs attention",
+                    color = MaterialThemeColors.muted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+        if (blocked) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Open Android settings",
+                color = MaterialThemeColors.accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .align(Alignment.End)
+                    .clickable(role = Role.Button, onClick = onOpenSettings)
+                    .padding(horizontal = 4.dp, vertical = 10.dp),
+            )
         }
     }
 }
@@ -508,6 +612,19 @@ private fun openOverlayPermission(context: android.content.Context) {
         context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }
+
+private fun openNotificationSettings(context: android.content.Context) {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { context.startActivity(intent) }.onFailure {
+        context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}
+
+private fun hasNotificationPermission(context: android.content.Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
 private fun developerOptionsEnabled(context: android.content.Context): Boolean =
     Settings.Global.getInt(context.contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
