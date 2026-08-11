@@ -19,6 +19,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,19 +53,26 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MicNone
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Settings
@@ -81,6 +90,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
@@ -90,11 +102,16 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -111,11 +128,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.pandora.mobile.linux.CodexLimitWindow
 import com.pandora.mobile.linux.CodexLimitsState
+import com.pandora.mobile.linux.ChatAttachment
+import com.pandora.mobile.linux.ChatAttachmentKind
 import com.pandora.mobile.linux.ChatMessage
 import com.pandora.mobile.linux.ChatRole
 import com.pandora.mobile.linux.CodexChatSession
@@ -124,6 +144,7 @@ import com.pandora.mobile.linux.CodexThreadCatalog
 import com.pandora.mobile.linux.CodexThreadSummary
 import com.pandora.mobile.linux.CodexUsageReader
 import com.pandora.mobile.linux.ArchiveCatalog
+import com.pandora.mobile.linux.agentDisplayText
 import com.pandora.mobile.linux.PtyTerminalSession
 import com.pandora.mobile.linux.PandoraProject
 import com.pandora.mobile.linux.ProjectCatalog
@@ -2587,6 +2608,12 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
     var draft by remember { mutableStateOf("") }
     var dictationPrefix by remember { mutableStateOf("") }
     var missingSpeechKind by remember { mutableStateOf<SpeechModelKind?>(null) }
+    val pendingAttachments = remember { mutableStateListOf<ChatAttachment>() }
+    var attachmentMenuOpen by remember { mutableStateOf(false) }
+    var importingAttachment by remember { mutableStateOf(false) }
+    var attachmentError by remember { mutableStateOf<String?>(null) }
+    var previewAttachment by remember { mutableStateOf<ChatAttachment?>(null) }
+    val chatScope = rememberCoroutineScope()
     val messages by session.messages.collectAsState()
     val state by session.state.collectAsState()
     val models by session.models.collectAsState()
@@ -2605,8 +2632,33 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
         CodexChatState.Closed -> "Closed"
     }
     fun submit() {
-        if (session.send(draft)) draft = ""
+        if (
+            dictation is DictationState.Loading ||
+            dictation is DictationState.Listening ||
+            dictation is DictationState.Transcribing
+        ) {
+            speech.cancelDictation()
+        }
+        if (session.send(draft, pendingAttachments.toList())) {
+            draft = ""
+            dictationPrefix = ""
+            pendingAttachments.clear()
+        }
     }
+    fun importAttachment(uri: android.net.Uri?) {
+        if (uri == null) return
+        attachmentMenuOpen = false
+        attachmentError = null
+        importingAttachment = true
+        chatScope.launch {
+            runCatching { ChatAttachmentStore.import(context, uri, session.id) }
+                .onSuccess(pendingAttachments::add)
+                .onFailure { attachmentError = it.message ?: "Could not add this attachment" }
+            importingAttachment = false
+        }
+    }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::importAttachment)
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::importAttachment)
     val microphonePermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -2672,6 +2724,11 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
             lifecycleOwner.lifecycle.removeObserver(observer)
             speech.cancelDictation()
             speech.stopSpeaking()
+        }
+    }
+    DisposableEffect(session.id) {
+        onDispose {
+            pendingAttachments.forEach { ChatAttachmentStore.deletePending(context, it) }
         }
     }
     LaunchedEffect(messages.size, messages.lastOrNull()?.text) {
@@ -2771,6 +2828,7 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
                         showAssistantIdentity = startsAssistantGroup,
                         speaking = playback is SpeechPlaybackState.Loading || playback is SpeechPlaybackState.Speaking,
                         onSpeak = { readAloud(message.text) },
+                        onPreviewAttachment = { previewAttachment = it },
                     )
                 }
             }
@@ -2803,78 +2861,134 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
         if (playback is SpeechPlaybackState.Failed) {
             VoiceStatus((playback as SpeechPlaybackState.Failed).detail, active = false)
         }
-        Row(
+        attachmentError?.let { error ->
+            Text(
+                error,
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 3.dp),
+            )
+        }
+        Column(
             modifier = Modifier
                 .padding(horizontal = 14.dp, vertical = 12.dp)
                 .background(SoftSurface, RoundedCornerShape(24.dp))
-                .padding(start = 16.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 6.dp, vertical = 6.dp),
         ) {
-            BasicTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                enabled = ready,
-                modifier = Modifier.weight(1f).heightIn(min = 40.dp, max = 132.dp),
-                textStyle = TextStyle(color = Ink, fontSize = 15.sp, lineHeight = 21.sp),
-                cursorBrush = SolidColor(Accent),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { submit() }),
-                decorationBox = { inner ->
-                    Box(
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        if (draft.isEmpty()) {
-                            Text(
-                                when {
-                                    ready -> "Message Codex…"
-                                    state is CodexChatState.Running -> "Codex is working…"
-                                    else -> "Codex is not ready…"
-                                },
-                                color = Color(0xFFA2A39E),
-                                fontSize = 15.sp,
-                                lineHeight = 21.sp,
-                            )
-                        }
-                        inner()
+            if (pendingAttachments.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(start = 5.dp, end = 5.dp, top = 3.dp, bottom = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    pendingAttachments.forEach { attachment ->
+                        PendingAttachmentChip(
+                            attachment = attachment,
+                            onPreview = { previewAttachment = attachment },
+                            onRemove = {
+                                pendingAttachments.remove(attachment)
+                                ChatAttachmentStore.deletePending(context, attachment)
+                            },
+                        )
                     }
-                }
-            )
-            IconButton(
-                onClick = {
-                    if (dictation is DictationState.Loading || dictation is DictationState.Listening) {
-                        speech.stopDictation()
-                    } else {
-                        beginDictation()
-                    }
-                },
-                enabled = ready && dictation !is DictationState.Transcribing,
-                modifier = Modifier.size(48.dp),
-            ) {
-                if (dictation is DictationState.Transcribing) {
-                    CircularProgressIndicator(Modifier.size(20.dp), color = Accent, strokeWidth = 2.dp)
-                } else {
-                    Icon(
-                        if (dictation is DictationState.Loading || dictation is DictationState.Listening) Icons.Rounded.Stop else Icons.Rounded.MicNone,
-                        contentDescription = if (dictation is DictationState.Loading || dictation is DictationState.Listening) "Stop dictation" else "Start dictation",
-                        tint = if (dictation is DictationState.Loading || dictation is DictationState.Listening) MaterialTheme.colorScheme.error else Accent,
-                        modifier = Modifier.size(21.dp),
-                    )
                 }
             }
-            Box(
-                Modifier
-                    .size(40.dp)
-                    .background(if (ready && draft.isNotBlank()) Accent else Line, CircleShape)
-                    .clickable(enabled = ready && draft.isNotBlank(), onClick = { submit() }),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.Send,
-                    contentDescription = "Send message",
-                    tint = if (ready && draft.isNotBlank()) MaterialTheme.colorScheme.onPrimary else Muted,
-                    modifier = Modifier.size(19.dp),
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    IconButton(
+                        onClick = { attachmentMenuOpen = true },
+                        enabled = ready && !importingAttachment,
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        if (importingAttachment) {
+                            CircularProgressIndicator(Modifier.size(18.dp), color = Accent, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Rounded.Add, contentDescription = "Add to conversation", tint = Accent, modifier = Modifier.size(22.dp))
+                        }
+                    }
+                    ComposerAddMenu(
+                        expanded = attachmentMenuOpen,
+                        onDismiss = { attachmentMenuOpen = false },
+                        onPhoto = {
+                            attachmentMenuOpen = false
+                            photoPicker.launch(arrayOf("image/*"))
+                        },
+                        onFile = {
+                            attachmentMenuOpen = false
+                            filePicker.launch(arrayOf("*/*"))
+                        },
+                    )
+                }
+                BasicTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    enabled = ready,
+                    modifier = Modifier.weight(1f).heightIn(min = 40.dp, max = 132.dp),
+                    textStyle = TextStyle(color = Ink, fontSize = 15.sp, lineHeight = 21.sp),
+                    cursorBrush = SolidColor(Accent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { submit() }),
+                    decorationBox = { inner ->
+                        Box(
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            if (draft.isEmpty()) {
+                                Text(
+                                    when {
+                                        ready -> "Message Codex…"
+                                        state is CodexChatState.Running -> "Codex is working…"
+                                        else -> "Codex is not ready…"
+                                    },
+                                    color = Color(0xFFA2A39E),
+                                    fontSize = 15.sp,
+                                    lineHeight = 21.sp,
+                                )
+                            }
+                            inner()
+                        }
+                    }
                 )
+                IconButton(
+                    onClick = {
+                        if (dictation is DictationState.Loading || dictation is DictationState.Listening) {
+                            speech.stopDictation()
+                        } else {
+                            beginDictation()
+                        }
+                    },
+                    enabled = ready && dictation !is DictationState.Transcribing,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    if (dictation is DictationState.Transcribing) {
+                        CircularProgressIndicator(Modifier.size(20.dp), color = Accent, strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            if (dictation is DictationState.Loading || dictation is DictationState.Listening) Icons.Rounded.Stop else Icons.Rounded.MicNone,
+                            contentDescription = if (dictation is DictationState.Loading || dictation is DictationState.Listening) "Stop dictation" else "Start dictation",
+                            tint = if (dictation is DictationState.Loading || dictation is DictationState.Listening) MaterialTheme.colorScheme.error else Accent,
+                            modifier = Modifier.size(21.dp),
+                        )
+                    }
+                }
+                val canSend = ready && (draft.isNotBlank() || pendingAttachments.isNotEmpty())
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .background(if (canSend) Accent else Line, CircleShape)
+                        .clickable(enabled = canSend, onClick = { submit() }),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.Send,
+                        contentDescription = "Send message",
+                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary else Muted,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
             }
         }
     }
@@ -2902,6 +3016,13 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
             dismissButton = {
                 TextButton(onClick = { missingSpeechKind = null }) { Text("Not now") }
             },
+        )
+    }
+
+    previewAttachment?.let { attachment ->
+        AttachmentPreviewDialog(
+            attachment = attachment,
+            onDismiss = { previewAttachment = null },
         )
     }
 }
@@ -2959,6 +3080,7 @@ private fun ChatMessageRow(
     showAssistantIdentity: Boolean = true,
     speaking: Boolean = false,
     onSpeak: () -> Unit = {},
+    onPreviewAttachment: (ChatAttachment) -> Unit = {},
 ) {
     when (message.role) {
         ChatRole.SYSTEM -> Row(
@@ -2974,26 +3096,370 @@ private fun ChatMessageRow(
                 lineHeight = 18.sp,
             )
         }
-        ChatRole.USER -> Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            Text(
-                message.text,
-                modifier = Modifier
-                    .widthIn(max = 320.dp)
-                    .background(AccentSurface, RoundedCornerShape(18.dp))
-                    .padding(horizontal = 15.dp, vertical = 11.dp),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontSize = 15.sp,
-                lineHeight = 21.sp,
-            )
-        }
+        ChatRole.USER -> UserMessage(message, onPreviewAttachment)
         ChatRole.ASSISTANT -> AssistantMessage(
             message,
             showIdentity = showAssistantIdentity,
             speaking = speaking,
             onSpeak = onSpeak,
+            onPreviewAttachment = onPreviewAttachment,
+        )
+    }
+}
+
+@Composable
+private fun UserMessage(message: ChatMessage, onPreviewAttachment: (ChatAttachment) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Column(
+            Modifier
+                .widthIn(max = 320.dp)
+                .background(AccentSurface, RoundedCornerShape(18.dp))
+                .padding(horizontal = 13.dp, vertical = 10.dp),
+        ) {
+            message.attachments.forEachIndexed { index, attachment ->
+                SentAttachmentPreview(attachment, onClick = { onPreviewAttachment(attachment) })
+                if (index != message.attachments.lastIndex) Spacer(Modifier.height(5.dp))
+            }
+            if (message.attachments.isNotEmpty() && message.text.isNotBlank()) Spacer(Modifier.height(8.dp))
+            if (message.text.isNotBlank()) {
+                Text(
+                    message.text,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SentAttachmentPreview(
+    attachment: ChatAttachment,
+    foreground: Color = MaterialTheme.colorScheme.onPrimaryContainer,
+    onClick: () -> Unit,
+) {
+    val context = LocalContext.current
+    val resolvedSize = remember(attachment.containerPath, attachment.sizeBytes) {
+        attachment.sizeBytes ?: ChatAttachmentStore.resolve(context, attachment)?.length()
+    }
+    var thumbnail by remember(attachment.containerPath) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    if (attachment.kind == ChatAttachmentKind.IMAGE) {
+        LaunchedEffect(attachment.containerPath) {
+            thumbnail = withContext(Dispatchers.IO) { ChatAttachmentStore.decodePreview(context, attachment, 640) }
+        }
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.72f), RoundedCornerShape(13.dp))
+            .clickable(onClickLabel = "Preview ${attachment.name}", onClick = onClick),
+    ) {
+        if (attachment.kind == ChatAttachmentKind.IMAGE) {
+            val bitmap = thumbnail
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Preview of ${attachment.name}",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxWidth().height(142.dp),
+                )
+            } else {
+                Box(Modifier.fillMaxWidth().height(92.dp), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.Image, contentDescription = null, tint = Accent, modifier = Modifier.size(28.dp))
+                }
+            }
+        }
+        Row(
+            Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (attachment.kind == ChatAttachmentKind.IMAGE) Icons.Rounded.Image else Icons.AutoMirrored.Rounded.InsertDriveFile,
+                contentDescription = null,
+                tint = Accent,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    attachment.name,
+                    color = foreground,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (attachment.kind == ChatAttachmentKind.FILE) {
+                    Text(formatAttachmentSize(resolvedSize), color = Accent, fontSize = 10.sp)
+                }
+            }
+            Icon(Icons.Rounded.OpenInFull, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun AgentAttachmentGroup(
+    attachments: List<ChatAttachment>,
+    onPreview: (ChatAttachment) -> Unit,
+) {
+    val images = attachments.filter { it.kind == ChatAttachmentKind.IMAGE }
+    val files = attachments.filter { it.kind == ChatAttachmentKind.FILE }
+    Column(
+        modifier = Modifier.widthIn(max = 340.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        images.forEach { attachment ->
+            SentAttachmentPreview(
+                attachment = attachment,
+                foreground = Ink,
+                onClick = { onPreview(attachment) },
+            )
+        }
+        if (files.isNotEmpty()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(SoftSurface, RoundedCornerShape(14.dp)),
+            ) {
+                files.forEachIndexed { index, attachment ->
+                    AgentFileRow(attachment, onClick = { onPreview(attachment) })
+                    if (index != files.lastIndex) {
+                        Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).height(1.dp).background(Line))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentFileRow(attachment: ChatAttachment, onClick: () -> Unit) {
+    val context = LocalContext.current
+    val resolvedSize = remember(attachment.containerPath, attachment.sizeBytes) {
+        attachment.sizeBytes ?: ChatAttachmentStore.resolve(context, attachment)?.length()
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 58.dp)
+            .clickable(onClickLabel = "Preview ${attachment.name}", onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(34.dp).background(AccentSurface, RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(attachment.name, color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(formatAttachmentSize(resolvedSize), color = Muted, fontSize = 10.sp)
+        }
+        Icon(Icons.Rounded.OpenInFull, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
+    }
+}
+
+@Composable
+private fun PendingAttachmentChip(attachment: ChatAttachment, onPreview: () -> Unit, onRemove: () -> Unit) {
+    Row(
+        Modifier
+            .background(Paper, RoundedCornerShape(13.dp))
+            .clickable(onClickLabel = "Preview ${attachment.name}", onClick = onPreview)
+            .padding(start = 9.dp, end = 2.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (attachment.kind == ChatAttachmentKind.IMAGE) Icons.Rounded.Image else Icons.Rounded.AttachFile,
+            contentDescription = null,
+            tint = Accent,
+            modifier = Modifier.size(17.dp),
+        )
+        Spacer(Modifier.width(7.dp))
+        Text(
+            attachment.name,
+            color = Ink,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 150.dp),
+        )
+        IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Rounded.Close, contentDescription = "Remove ${attachment.name}", tint = Muted, modifier = Modifier.size(15.dp))
+        }
+    }
+}
+
+@Composable
+private fun AttachmentPreviewDialog(attachment: ChatAttachment, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val resolvedSize = remember(attachment.containerPath, attachment.sizeBytes) {
+        attachment.sizeBytes ?: ChatAttachmentStore.resolve(context, attachment)?.length()
+    }
+    var image by remember(attachment.containerPath) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var textPreview by remember(attachment.containerPath) { mutableStateOf<String?>(null) }
+    var loaded by remember(attachment.containerPath) { mutableStateOf(false) }
+    var actionMessage by remember(attachment.containerPath) { mutableStateOf<String?>(null) }
+    val actionScope = rememberCoroutineScope()
+    val saveCopy = rememberLauncherForActivityResult(
+        remember(attachment.mimeType) {
+            ActivityResultContracts.CreateDocument(attachment.mimeType.ifBlank { "application/octet-stream" })
+        },
+    ) { destination ->
+        if (destination != null) {
+            actionScope.launch {
+                runCatching { ChatAttachmentStore.saveCopy(context, attachment, destination) }
+                    .onSuccess { actionMessage = "Saved to Android storage" }
+                    .onFailure { actionMessage = it.message ?: "Could not save this attachment" }
+            }
+        }
+    }
+    LaunchedEffect(attachment.containerPath) {
+        if (attachment.kind == ChatAttachmentKind.IMAGE) {
+            image = withContext(Dispatchers.IO) { ChatAttachmentStore.decodePreview(context, attachment, 2048) }
+        } else {
+            textPreview = withContext(Dispatchers.IO) {
+                runCatching { ChatAttachmentStore.readTextPreview(context, attachment) }.getOrNull()
+            }
+        }
+        loaded = true
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        val dialogView = androidx.compose.ui.platform.LocalView.current
+        val dialogBackground = MaterialTheme.colorScheme.background
+        SideEffect {
+            val window = (dialogView.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+            styleAttachmentDialogSystemBars(window, dialogView, dialogBackground)
+        }
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(44.dp)) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Close preview", tint = Ink)
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(attachment.name, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(formatAttachmentSize(resolvedSize), color = Muted, fontSize = 11.sp)
+                    }
+                    IconButton(onClick = {
+                        if (!ChatAttachmentStore.openWithAndroid(context, attachment)) {
+                            actionMessage = "No Android app can open this file type"
+                        }
+                    }) {
+                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = "Open in Android", tint = Accent)
+                    }
+                    IconButton(onClick = { saveCopy.launch(attachment.name) }) {
+                        Icon(Icons.Rounded.Download, contentDescription = "Save a copy", tint = Accent)
+                    }
+                }
+                actionMessage?.let { message ->
+                    Text(
+                        message,
+                        color = if (message.startsWith("Saved")) Accent else MaterialTheme.colorScheme.error,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .semantics { liveRegion = LiveRegionMode.Polite }
+                            .padding(horizontal = 18.dp, vertical = 4.dp),
+                    )
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+                Box(Modifier.fillMaxSize().padding(18.dp), contentAlignment = Alignment.Center) {
+                    when {
+                        !loaded -> CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
+                        attachment.kind == ChatAttachmentKind.IMAGE && image != null -> Image(
+                            bitmap = image!!.asImageBitmap(),
+                            contentDescription = attachment.name,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        textPreview != null -> Text(
+                            textPreview.orEmpty(),
+                            color = Ink,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        )
+                        else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null, tint = Accent, modifier = Modifier.size(42.dp))
+                            Spacer(Modifier.height(12.dp))
+                            Text("Preview unavailable", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(5.dp))
+                            Text("This file type can still be sent to Codex.", color = Muted, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Suppress("DEPRECATION")
+private fun styleAttachmentDialogSystemBars(
+    window: android.view.Window,
+    view: android.view.View,
+    background: Color,
+) {
+    window.statusBarColor = background.toArgb()
+    window.navigationBarColor = background.toArgb()
+    WindowCompat.getInsetsController(window, view).apply {
+        val useDarkIcons = background.luminance() > 0.5f
+        isAppearanceLightStatusBars = useDarkIcons
+        isAppearanceLightNavigationBars = useDarkIcons
+    }
+}
+
+private fun formatAttachmentSize(bytes: Long?): String = when {
+    bytes == null -> "File"
+    bytes < 1_024 -> "$bytes B"
+    bytes < 1_048_576 -> String.format(Locale.US, "%.1f KB", bytes / 1_024.0)
+    else -> String.format(Locale.US, "%.1f MB", bytes / 1_048_576.0)
+}
+
+@Composable
+private fun ComposerAddMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onPhoto: () -> Unit,
+    onFile: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = {
+                Column {
+                    Text("Photo", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Add an image for Codex to inspect", color = Muted, fontSize = 11.sp)
+                }
+            },
+            leadingIcon = { Icon(Icons.Rounded.Image, contentDescription = null, tint = Accent, modifier = Modifier.size(20.dp)) },
+            onClick = onPhoto,
+        )
+        DropdownMenuItem(
+            text = {
+                Column {
+                    Text("File", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Attach a document from this device", color = Muted, fontSize = 11.sp)
+                }
+            },
+            leadingIcon = { Icon(Icons.Rounded.AttachFile, contentDescription = null, tint = Accent, modifier = Modifier.size(20.dp)) },
+            onClick = onFile,
         )
     }
 }
@@ -3004,9 +3470,13 @@ private fun AssistantMessage(
     showIdentity: Boolean,
     speaking: Boolean,
     onSpeak: () -> Unit,
+    onPreviewAttachment: (ChatAttachment) -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(message.id) { mutableStateOf(false) }
+    val displayText = remember(message.text, message.attachments) {
+        if (message.attachments.isEmpty()) message.text else agentDisplayText(message.text)
+    }
     Column(Modifier.fillMaxWidth()) {
         if (showIdentity) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3020,13 +3490,19 @@ private fun AssistantMessage(
                 Text("Codex", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
         }
-        RichMarkdown(
-            markdown = message.text,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = if (showIdentity) 9.dp else 0.dp, end = 4.dp),
-            color = Ink,
-        )
+        if (displayText.isNotBlank()) {
+            RichMarkdown(
+                markdown = displayText,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = if (showIdentity) 9.dp else 0.dp, end = 4.dp),
+                color = Ink,
+            )
+        }
+        if (message.attachments.isNotEmpty()) {
+            Spacer(Modifier.height(if (displayText.isBlank() && !showIdentity) 0.dp else 10.dp))
+            AgentAttachmentGroup(message.attachments, onPreviewAttachment)
+        }
         Row(Modifier.padding(top = 2.dp)) {
             IconButton(
                 onClick = {

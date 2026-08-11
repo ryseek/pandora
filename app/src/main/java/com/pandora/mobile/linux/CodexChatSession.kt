@@ -3,6 +3,9 @@ package com.pandora.mobile.linux
 import android.content.Context
 import java.io.BufferedWriter
 import java.io.File
+import java.net.URLDecoder
+import java.net.URLConnection
+import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -20,10 +23,21 @@ import org.json.JSONObject
 
 enum class ChatRole { USER, ASSISTANT, SYSTEM }
 
+enum class ChatAttachmentKind { IMAGE, FILE }
+
+data class ChatAttachment(
+    val kind: ChatAttachmentKind,
+    val name: String,
+    val containerPath: String,
+    val mimeType: String = "",
+    val sizeBytes: Long? = null,
+)
+
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val role: ChatRole,
     val text: String,
+    val attachments: List<ChatAttachment> = emptyList(),
 )
 
 data class CodexModel(
@@ -54,12 +68,14 @@ class CodexChatSession(
 ) {
     private val appContext = context.applicationContext
     private val installer = RootfsInstaller(appContext)
+    private val attachmentIndex = ChatAttachmentIndex(installer.workspace)
     private val registry = PandoraChatRegistry(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val closed = AtomicBoolean(false)
     private val nextRequestId = AtomicInteger(4)
     private val writerLock = Any()
     private val turnRequestIds = mutableSetOf<Int>()
+    private val turnRequestOrdinals = mutableMapOf<Int, Int>()
     private val assistantMessageIds = mutableMapOf<String, String>()
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -87,26 +103,36 @@ class CodexChatSession(
         scope.launch { start() }
     }
 
-    fun send(text: String): Boolean {
+    fun send(text: String, attachments: List<ChatAttachment> = emptyList()): Boolean {
         val prompt = text.trim()
         val activeThread = threadId ?: return false
-        if (prompt.isEmpty() || _state.value !is CodexChatState.Ready) return false
+        if ((prompt.isEmpty() && attachments.isEmpty()) || _state.value !is CodexChatState.Ready) return false
 
-        _messages.value = _messages.value + ChatMessage(role = ChatRole.USER, text = prompt)
+        val userOrdinal = _messages.value.count { it.role == ChatRole.USER }
+        _messages.value = _messages.value + ChatMessage(
+            role = ChatRole.USER,
+            text = prompt,
+            attachments = attachments,
+        )
         _state.value = CodexChatState.Running(model)
         val requestId = nextRequestId.getAndIncrement()
-        synchronized(turnRequestIds) { turnRequestIds += requestId }
+        synchronized(turnRequestIds) {
+            turnRequestIds += requestId
+            turnRequestOrdinals[requestId] = userOrdinal
+        }
         val params = JSONObject()
             .put("threadId", activeThread)
-            .put(
-                "input",
-                JSONArray().put(JSONObject().put("type", "text").put("text", prompt)),
-            )
+            .put("input", buildTurnInput(prompt, attachments))
         _selectedModel.value?.let { params.put("model", it) }
+        runCatching { attachmentIndex.record(activeThread, userOrdinal, prompt, attachments) }
+            .onFailure { android.util.Log.w(TAG, "Could not persist attachment metadata", it) }
         return if (sendRequest(requestId, "turn/start", params)) {
             true
         } else {
-            synchronized(turnRequestIds) { turnRequestIds -= requestId }
+            synchronized(turnRequestIds) {
+                turnRequestIds -= requestId
+                turnRequestOrdinals -= requestId
+            }
             fail("Could not send the message to Codex")
             false
         }
@@ -194,6 +220,7 @@ class CodexChatSession(
             if (id == 1 || id == 2) {
                 fail(detail)
             } else if (synchronized(turnRequestIds) { turnRequestIds.remove(id) }) {
+                synchronized(turnRequestIds) { turnRequestOrdinals.remove(id) }
                 addSystemMessage(detail)
                 if (!closed.get()) _state.value = CodexChatState.Ready(model)
             }
@@ -207,6 +234,7 @@ class CodexChatSession(
                     .put("cwd", cwd)
                     .put("sandbox", "danger-full-access")
                     .put("approvalPolicy", "never")
+                    .put("developerInstructions", AGENT_ATTACHMENT_INSTRUCTIONS)
                 if (resumeThreadId == null) {
                     params.put("threadSource", "pandora_android")
                     sendRequest(2, "thread/start", params)
@@ -245,34 +273,96 @@ class CodexChatSession(
                     }
                 }
             }
-            else -> synchronized(turnRequestIds) { turnRequestIds.remove(id) }
+            else -> {
+                val userOrdinal = synchronized(turnRequestIds) {
+                    turnRequestIds.remove(id)
+                    turnRequestOrdinals.remove(id)
+                }
+                val responseTurnId = message.optJSONObject("result")
+                    ?.optJSONObject("turn")
+                    ?.optString("id")
+                    .orEmpty()
+                val activeThread = threadId
+                if (userOrdinal != null && activeThread != null && responseTurnId.isNotBlank()) {
+                    runCatching { attachmentIndex.associateTurn(activeThread, userOrdinal, responseTurnId) }
+                        .onFailure { android.util.Log.w(TAG, "Could not associate attachment turn", it) }
+                }
+            }
         }
     }
 
     private fun loadHistory(thread: JSONObject?) {
         val turns = thread?.optJSONArray("turns") ?: return
         val history = mutableListOf<ChatMessage>()
+        val restoredThreadId = threadId ?: resumeThreadId
+        var userOrdinal = 0
+        var lastIndexedOrdinal: Int? = null
+        val usedIndexedOrdinals = mutableSetOf<Int>()
         for (turnIndex in 0 until turns.length()) {
-            val items = turns.optJSONObject(turnIndex)?.optJSONArray("items") ?: continue
+            val turn = turns.optJSONObject(turnIndex) ?: continue
+            val turnId = turn.optString("id")
+            val items = turn.optJSONArray("items") ?: continue
             for (itemIndex in 0 until items.length()) {
                 val item = items.optJSONObject(itemIndex) ?: continue
                 val itemId = item.optString("id", UUID.randomUUID().toString())
                 when (item.optString("type")) {
                     "userMessage" -> {
                         val content = item.optJSONArray("content") ?: JSONArray()
+                        val attachments = mutableListOf<ChatAttachment>()
                         val text = buildString {
                             for (contentIndex in 0 until content.length()) {
                                 val input = content.optJSONObject(contentIndex) ?: continue
-                                if (input.optString("type") == "text") append(input.optString("text"))
+                                when (input.optString("type")) {
+                                    "text" -> append(input.optString("text"))
+                                    "localImage" -> input.optString("path").takeIf(String::isNotBlank)?.let { path ->
+                                        attachments += ChatAttachment(
+                                            kind = ChatAttachmentKind.IMAGE,
+                                            name = attachmentDisplayName(path),
+                                            containerPath = path,
+                                        )
+                                    }
+                                    "mention" -> input.optString("path").takeIf(String::isNotBlank)?.let { path ->
+                                        attachments += ChatAttachment(
+                                            kind = ChatAttachmentKind.FILE,
+                                            name = input.optString("name").takeIf(String::isNotBlank) ?: attachmentDisplayName(path),
+                                            containerPath = path,
+                                        )
+                                    }
+                                }
                             }
                         }
-                        if (text.isNotBlank()) history += ChatMessage(itemId, ChatRole.USER, text)
+                        val restored = restoredThreadId?.let {
+                            attachmentIndex.attachments(
+                                threadId = it,
+                                userOrdinal = userOrdinal,
+                                text = text,
+                                serverAttachments = attachments,
+                                turnId = turnId,
+                                afterIndexedOrdinal = lastIndexedOrdinal,
+                                usedOrdinals = usedIndexedOrdinals,
+                            )
+                        }
+                        restored?.let {
+                            usedIndexedOrdinals += it.ordinal
+                            lastIndexedOrdinal = it.ordinal
+                        }
+                        val mergedAttachments = (restored?.attachments.orEmpty() + attachments)
+                            .distinctBy(ChatAttachment::containerPath)
+                        if (text.isNotBlank() || mergedAttachments.isNotEmpty()) {
+                            history += ChatMessage(itemId, ChatRole.USER, text, mergedAttachments)
+                        }
+                        userOrdinal += 1
                     }
                     "agentMessage" -> {
                         val text = item.optString("text")
                         if (text.isNotBlank()) {
                             assistantMessageIds[itemId] = itemId
-                            history += ChatMessage(itemId, ChatRole.ASSISTANT, text)
+                            history += ChatMessage(
+                                itemId,
+                                ChatRole.ASSISTANT,
+                                text,
+                                extractAgentAttachments(text, installer.workspace),
+                            )
                         }
                     }
                 }
@@ -330,9 +420,18 @@ class CodexChatSession(
         val current = _messages.value.toMutableList()
         val index = current.indexOfFirst { it.id == messageId }
         if (index >= 0) {
-            current[index] = current[index].copy(text = current[index].text + delta)
+            val text = current[index].text + delta
+            current[index] = current[index].copy(
+                text = text,
+                attachments = extractAgentAttachments(text, installer.workspace),
+            )
         } else {
-            current += ChatMessage(id = messageId, role = ChatRole.ASSISTANT, text = delta)
+            current += ChatMessage(
+                id = messageId,
+                role = ChatRole.ASSISTANT,
+                text = delta,
+                attachments = extractAgentAttachments(delta, installer.workspace),
+            )
         }
         _messages.value = current
     }
@@ -378,3 +477,99 @@ class CodexChatSession(
         const val TAG = "CodexChatSession"
     }
 }
+
+internal data class CodexTurnInputSpec(
+    val type: String,
+    val text: String? = null,
+    val path: String? = null,
+    val name: String? = null,
+    val detail: String? = null,
+)
+
+internal fun buildTurnInputSpecs(text: String, attachments: List<ChatAttachment>): List<CodexTurnInputSpec> = buildList {
+    text.trim().takeIf(String::isNotEmpty)?.let { prompt ->
+        add(CodexTurnInputSpec(type = "text", text = prompt))
+    }
+    attachments.forEach { attachment ->
+        add(
+            when (attachment.kind) {
+                ChatAttachmentKind.IMAGE -> CodexTurnInputSpec(
+                    type = "localImage",
+                    path = attachment.containerPath,
+                    detail = "auto",
+                )
+                ChatAttachmentKind.FILE -> CodexTurnInputSpec(
+                    type = "mention",
+                    name = attachment.name,
+                    path = attachment.containerPath,
+                )
+            },
+        )
+    }
+}
+
+internal fun buildTurnInput(text: String, attachments: List<ChatAttachment>): JSONArray = JSONArray().apply {
+    buildTurnInputSpecs(text, attachments).forEach { input ->
+        put(JSONObject().put("type", input.type).apply {
+            input.text?.let { put("text", it) }
+            input.path?.let { put("path", it) }
+            input.name?.let { put("name", it) }
+            input.detail?.let { put("detail", it) }
+        })
+    }
+}
+
+internal fun attachmentDisplayName(path: String): String = File(path).name.replace(
+    Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}-"),
+    "",
+)
+
+private val agentFileLink = Regex("\\[([^]]*)]\\(<?(/root/[^)>]+)>?\\)")
+private val standaloneAgentFileLink = Regex(
+    "(?m)^\\s*(?:(?:[-*+])|(?:\\d+[.)]))\\s+\\[[^]]*]\\(<?/root/[^)>]+>?\\)\\s*$",
+)
+
+internal fun extractAgentAttachments(text: String, workspace: File): List<ChatAttachment> = agentFileLink
+    .findAll(text)
+    .mapNotNull { match ->
+        val containerPath = runCatching {
+            URLDecoder.decode(match.groupValues[2], StandardCharsets.UTF_8.name())
+        }.getOrNull() ?: return@mapNotNull null
+        val relative = containerPath.removePrefix("/root/")
+        if (relative == containerPath) return@mapNotNull null
+        val root = workspace.canonicalFile
+        val file = File(root, relative).canonicalFile
+        if (!file.path.startsWith(root.path + File.separator) || !file.isFile) return@mapNotNull null
+        val mimeType = guessAttachmentMimeType(file.name)
+        ChatAttachment(
+            kind = if (mimeType.startsWith("image/")) ChatAttachmentKind.IMAGE else ChatAttachmentKind.FILE,
+            name = attachmentDisplayName(containerPath),
+            containerPath = containerPath,
+            mimeType = mimeType,
+            sizeBytes = file.length(),
+        )
+    }
+    .distinctBy(ChatAttachment::containerPath)
+    .toList()
+
+internal fun agentDisplayText(text: String): String = standaloneAgentFileLink
+    .replace(text, "")
+    .let { value -> agentFileLink.replace(value) { match -> match.groupValues[1] } }
+    .replace(Regex("\\n{3,}"), "\n\n")
+    .trim()
+
+private fun guessAttachmentMimeType(name: String): String = URLConnection.guessContentTypeFromName(name)
+    ?: when (name.substringAfterLast('.', "").lowercase()) {
+        "md", "markdown" -> "text/markdown"
+        "json" -> "application/json"
+        "csv" -> "text/csv"
+        "txt", "log" -> "text/plain"
+        "pdf" -> "application/pdf"
+        "zip" -> "application/zip"
+        else -> "application/octet-stream"
+    }
+
+private const val AGENT_ATTACHMENT_INSTRUCTIONS =
+    "When you intend to deliver a file to the user, create it under /root and include an explicit Markdown link " +
+        "to its absolute /root path in your final response, for example [report.pdf](/root/project/report.pdf). " +
+        "Pandora turns verified local file links into previewable, openable, saveable attachments."

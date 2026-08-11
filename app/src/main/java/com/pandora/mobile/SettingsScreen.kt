@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SettingsBrightness
+import androidx.compose.material.icons.rounded.Upload
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -487,10 +491,10 @@ fun SettingsScreen(
                 lineHeight = 18.sp,
             )
             Spacer(Modifier.height(14.dp))
-            BackupAction(
+            SettingsAction(
                 title = "Repair Linux container",
                 subtitle = "Reinstall system files and required packages",
-                symbol = "↻",
+                icon = { tint -> Icon(Icons.Rounded.Build, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) },
                 enabled = !repairing && !backupBusy,
                 onClick = {
                     repairError = null
@@ -505,34 +509,24 @@ fun SettingsScreen(
             Spacer(Modifier.height(28.dp))
             Text("CODEX", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(14.dp))
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, SettingsLine, RoundedCornerShape(16.dp))
-                    .clickable(enabled = codexInstalled, onClick = onCodexLogin)
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(42.dp).background(Color(0xFF20211F), RoundedCornerShape(13.dp)),
-                    contentAlignment = Alignment.Center,
-                ) { Text("✦", color = Color(0xFFBEB3FF), fontSize = 18.sp) }
-                Spacer(Modifier.width(13.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Codex login", color = SettingsInk, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        when {
-                            !codexInstalled -> "Codex is still installing"
-                            codexSignedIn -> "Signed in · authenticate again"
-                            else -> "Sign in with ChatGPT"
-                        },
-                        color = SettingsMuted,
-                        fontSize = 13.sp,
+            SettingsAction(
+                title = "Codex login",
+                subtitle = when {
+                    !codexInstalled -> "Codex is still installing"
+                    codexSignedIn -> "Signed in · authenticate again"
+                    else -> "Sign in with ChatGPT"
+                },
+                icon = {
+                    Image(
+                        painter = painterResource(R.drawable.codex_mark),
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
                     )
-                }
-                Text("→", color = if (codexInstalled) SettingsAccent else SettingsMuted, fontSize = 19.sp)
-            }
+                },
+                enabled = codexInstalled,
+                iconBackground = Color(0xFF20211F),
+                onClick = onCodexLogin,
+            )
 
             Spacer(Modifier.height(28.dp))
             Text("BACKUP", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -544,21 +538,27 @@ fun SettingsScreen(
                 lineHeight = 18.sp,
             )
             Spacer(Modifier.height(14.dp))
-            BackupAction(
+            SettingsAction(
                 title = "Save backup",
                 subtitle = "Export the persistent workspace as a portable ZIP",
-                symbol = "↓",
+                icon = { tint -> Icon(Icons.Rounded.Download, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) },
                 enabled = !backupBusy,
                 onClick = {
                     val stamp = SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date())
                     createBackup.launch("pandora-backup-$stamp.zip")
                 },
             )
-            Spacer(Modifier.height(10.dp))
-            BackupAction(
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 55.dp)
+                    .height(1.dp)
+                    .background(SettingsLine),
+            )
+            SettingsAction(
                 title = "Restore backup",
                 subtitle = "Replace the current workspace from a Pandora backup",
-                symbol = "↑",
+                icon = { tint -> Icon(Icons.Rounded.Upload, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) },
                 enabled = !backupBusy,
                 onClick = { chooseBackup.launch(arrayOf("application/zip", "application/octet-stream")) },
             )
@@ -807,32 +807,49 @@ private fun dictationDiagnosticsLabel(diagnostics: DictationDiagnostics): String
 }
 
 @Composable
-private fun BackupAction(
+private fun SettingsAction(
     title: String,
     subtitle: String,
-    symbol: String,
+    icon: @Composable (Color) -> Unit,
     enabled: Boolean,
+    iconBackground: Color = Color.Unspecified,
+    iconTint: Color = Color.Unspecified,
     onClick: () -> Unit,
 ) {
+    val resolvedIconBackground = if (iconBackground == Color.Unspecified) SettingsSoftSurface else iconBackground
+    val resolvedIconTint = if (!enabled) {
+        SettingsMuted
+    } else if (iconTint == Color.Unspecified) {
+        SettingsAccent
+    } else {
+        iconTint
+    }
     Row(
         Modifier
             .fillMaxWidth()
-            .border(1.dp, SettingsLine, RoundedCornerShape(16.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(16.dp),
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(42.dp).background(SettingsSoftSurface, RoundedCornerShape(13.dp)),
+            Modifier.size(42.dp).background(resolvedIconBackground, RoundedCornerShape(13.dp)),
             contentAlignment = Alignment.Center,
-        ) { Text(symbol, color = SettingsAccent, fontSize = 19.sp, fontWeight = FontWeight.Bold) }
+        ) {
+            icon(resolvedIconTint)
+        }
         Spacer(Modifier.width(13.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, color = if (enabled) SettingsInk else SettingsMuted, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(title, color = if (enabled) SettingsInk else SettingsMuted, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(3.dp))
-            Text(subtitle, color = SettingsMuted, fontSize = 13.sp)
+            Text(subtitle, color = SettingsMuted, fontSize = 12.sp, lineHeight = 17.sp)
         }
-        Text("→", color = if (enabled) SettingsAccent else SettingsMuted, fontSize = 19.sp)
+        Spacer(Modifier.width(10.dp))
+        Icon(
+            Icons.AutoMirrored.Rounded.ArrowForward,
+            contentDescription = null,
+            tint = SettingsMuted,
+            modifier = Modifier.size(19.dp),
+        )
     }
 }
 
