@@ -825,7 +825,7 @@ private fun HomeScreen(
     var actionError by remember { mutableStateOf<String?>(null) }
     var addProjectStep by remember { mutableStateOf<AddProjectStep?>(null) }
     var showNewChatDialog by remember { mutableStateOf(false) }
-    var expandedProjects by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var collapsedProjects by remember(context) { mutableStateOf(AppSettings.collapsedProjectPaths(context)) }
     val actionScope = rememberCoroutineScope()
     LaunchedEffect(limitRefresh, sessions.size) {
         limitState = CodexLimitsState.Loading
@@ -875,9 +875,6 @@ private fun HomeScreen(
             )
     }
     val projectPaths = remember(projects) { projects.map { it.path } }
-    LaunchedEffect(projectPaths) {
-        expandedProjects = expandedProjects + projectPaths
-    }
     val projectChats = remember(activeChats, projectPaths) {
         projectPaths.associateWith { path ->
             activeChats.filter { it.cwd == path }.map(WorkspaceEntry::Chat)
@@ -941,14 +938,15 @@ private fun HomeScreen(
             projects.forEach { project ->
                 val path = project.path
                 val projectEntries = projectChats[path].orEmpty()
-                val expanded = path in expandedProjects
+                val expanded = path !in collapsedProjects
                 item("project:$path") {
                     ProjectHeader(
                         project = project,
                         chatCount = projectEntries.size,
                         expanded = expanded,
                         onToggle = {
-                            expandedProjects = if (expanded) expandedProjects - path else expandedProjects + path
+                            collapsedProjects = if (expanded) collapsedProjects + path else collapsedProjects - path
+                            AppSettings.setProjectExpanded(context, path, !expanded)
                         },
                         onRename = { renameProject = project; actionError = null },
                         onPin = {
@@ -1144,7 +1142,6 @@ private fun HomeScreen(
                     actionInFlight = false
                     result.onSuccess { updated ->
                         archive = updated
-                        expandedProjects = expandedProjects - project.path
                         archiveProject = null
                     }.onFailure {
                         actionError = it.message ?: "Could not archive this project"
@@ -1185,7 +1182,6 @@ private fun HomeScreen(
                         archive = updated
                         chats = chats.filterNot { it.id in projectChatIds }
                         registeredProjects = registeredProjects.filterNot { it.path == project.path }
-                        expandedProjects = expandedProjects - project.path
                         deleteProject = null
                     }.onFailure {
                         actionError = it.message ?: "Could not delete this project"

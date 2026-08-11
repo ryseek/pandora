@@ -16,6 +16,7 @@ object AppSettings {
     private const val TEXT_TO_SPEECH_MODEL = "text_to_speech_model"
     private const val SPEAK_ASSISTANT_RESPONSES = "speak_assistant_responses"
     private const val ONBOARDING_COMPLETED = "onboarding_completed"
+    private const val COLLAPSED_PROJECT_PATHS = "collapsed_project_paths"
 
     enum class ThemePreference { SYSTEM, LIGHT, DARK }
 
@@ -108,5 +109,18 @@ object AppSettings {
     fun setOnboardingCompleted(context: Context, completed: Boolean) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit().putBoolean(ONBOARDING_COMPLETED, completed).apply()
+    }
+
+    fun collapsedProjectPaths(context: Context): Set<String> =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getStringSet(COLLAPSED_PROJECT_PATHS, emptySet())
+            ?.toSet()
+            .orEmpty()
+
+    fun setProjectExpanded(context: Context, path: String, expanded: Boolean) {
+        val collapsedPaths = collapsedProjectPaths(context).toMutableSet()
+        if (expanded) collapsedPaths.remove(path) else collapsedPaths.add(path)
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putStringSet(COLLAPSED_PROJECT_PATHS, collapsedPaths).apply()
     }
 }
