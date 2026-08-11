@@ -1,0 +1,4 @@
+interface:
+  display_name: "Android Phone Control"
+  short_description: "Operate this Android device safely with ADB"
+  default_prompt: "Use $android-phone-control to operate this Android phone for me."

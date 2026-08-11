@@ -19,7 +19,7 @@ class RootfsInstaller(private val context: Context) {
     val nativeLibDir = File(context.applicationInfo.nativeLibraryDir)
     val tempDir = File(context.cacheDir, "proot-tmp")
     private val marker = File(rootfs, ".pandora-rootfs-v2")
-    private val defaultPackagesMarker = File(rootfs, ".pandora-default-packages-v3")
+    private val defaultPackagesMarker = File(rootfs, ".pandora-default-packages-v4")
 
     fun isSetupComplete(): Boolean =
         marker.isFile &&
@@ -203,6 +203,23 @@ class RootfsInstaller(private val context: Context) {
         }
     }
 
+    /** Installs app-managed device skills after the phone has a verified ADB connection. */
+    internal fun installAdbControlSkill() {
+        listOf("android-phone-control", "agent-notifications").forEach { skillName ->
+            val skillRoot = File(workspace, ".codex/skills/$skillName")
+            listOf(
+                "SKILL.md",
+                "agents/openai.yaml",
+            ).forEach { relativePath ->
+                val target = File(skillRoot, relativePath)
+                target.parentFile?.mkdirs()
+                context.assets.open("pandora/skills/$skillName/$relativePath").use { input ->
+                    target.outputStream().use(input::copyTo)
+                }
+            }
+        }
+    }
+
     /**
      * Android/PRoot has neither a desktop keyring nor the user namespaces Bubblewrap needs.
      * Keep these machine-level Codex settings above any TOML tables so they apply globally.
@@ -277,6 +294,10 @@ class RootfsInstaller(private val context: Context) {
                 put("TERM", "dumb")
                 put("DEBIAN_FRONTEND", "noninteractive")
                 put("LANG", "C.UTF-8")
+                // An adb server running inside an emulator otherwise discovers that
+                // same emulator on localhost:5555 and opens the misleading legacy
+                // "Allow USB debugging?" dialog. Pandora uses explicit TLS pairing.
+                put("ADB_LOCAL_TRANSPORT_MAX_PORT", "0")
                 put(PROCESS_IDENTITY_ENV, processIdentity)
             }
         }.start()
@@ -464,11 +485,13 @@ class RootfsInstaller(private val context: Context) {
         val PROCESS_IDENTITIES = WeakHashMap<Process, String>()
         val DEFAULT_PACKAGES = listOf(
             "ca-certificates",
+            "curl",
             "util-linux",
             "nodejs",
             "npm",
             "git",
             "ripgrep",
+            "adb",
         )
         const val ZMX_VERSION = "0.7.0"
         const val ZMX_URL = "https://zmx.sh/a/zmx-0.7.0-linux-aarch64.tar.gz"

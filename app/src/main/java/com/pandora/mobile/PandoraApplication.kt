@@ -8,10 +8,14 @@ class PandoraApplication : Application() {
     val chatSessions: CodexChatSessionManager by lazy { CodexChatSessionManager(this) }
     val speechModels: SpeechModelManager by lazy { SpeechModelManager(this) }
     val onDeviceSpeech: OnDeviceSpeech by lazy { OnDeviceSpeech(this, speechModels) }
+    val adbPlugin: AdbPluginManager by lazy { AdbPluginManager(this) }
 
     override fun onCreate() {
         super.onCreate()
         onDeviceSpeech.prewarmSelectedModels()
+        // The loopback bridge also serves agent notifications, so it remains
+        // available even when the optional ADB phone-control plugin is disabled.
+        adbPlugin.start()
     }
 
     override fun onTrimMemory(level: Int) {
@@ -29,6 +33,7 @@ class PandoraApplication : Application() {
         onDeviceSpeech.releaseWarmModels()
         chatSessions.stopAll()
         terminalSessions.stopAll()
+        adbPlugin.close()
         super.onTerminate()
     }
 }

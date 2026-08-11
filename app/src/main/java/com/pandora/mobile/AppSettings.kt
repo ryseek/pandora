@@ -17,6 +17,7 @@ object AppSettings {
     private const val SPEAK_ASSISTANT_RESPONSES = "speak_assistant_responses"
     private const val ONBOARDING_COMPLETED = "onboarding_completed"
     private const val COLLAPSED_PROJECT_PATHS = "collapsed_project_paths"
+    private const val ADB_PLUGIN_ENABLED = "adb_plugin_enabled"
 
     enum class ThemePreference { SYSTEM, LIGHT, DARK }
 
@@ -122,5 +123,14 @@ object AppSettings {
         if (expanded) collapsedPaths.remove(path) else collapsedPaths.add(path)
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit().putStringSet(COLLAPSED_PROJECT_PATHS, collapsedPaths).apply()
+    }
+
+    fun adbPluginEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(ADB_PLUGIN_ENABLED, false)
+
+    fun setAdbPluginEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(ADB_PLUGIN_ENABLED, enabled).apply()
     }
 }

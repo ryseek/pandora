@@ -1,0 +1,5 @@
+interface:
+  display_name: "Agent Notifications"
+  short_description: "Notify you when agent work is ready"
+  default_prompt: "Use $agent-notifications to notify me when this work is ready."
+

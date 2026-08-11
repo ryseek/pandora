@@ -169,7 +169,7 @@ private val AccentSurface: Color @Composable get() = MaterialTheme.colorScheme.p
 private val Terminal = Color(0xFF111210)
 private val TerminalText = Color(0xFFD8E4D1)
 
-private enum class Screen { Onboarding, Home, Chat, Container, Settings, Archive }
+private enum class Screen { Onboarding, Home, Chat, Container, Settings, Plugins, AdbSetup, Archive }
 
 private sealed interface OnboardingState {
     data object Welcome : OnboardingState
@@ -194,6 +194,7 @@ private fun PandoraApp() {
     val sessions by sessionManager.sessions.collectAsState()
     val sessionRevision by sessionManager.revision.collectAsState()
     val chatSessions by chatManager.sessions.collectAsState()
+    val adbState by context.adbPlugin.state.collectAsState()
     var screen by remember {
         mutableStateOf(
             if (AppSettings.onboardingCompleted(context)) Screen.Home else Screen.Onboarding,
@@ -314,6 +315,7 @@ private fun PandoraApp() {
                         },
                         onBack = { screen = settingsReturnScreen },
                         onArchive = { screen = Screen.Archive },
+                        onPlugins = { screen = Screen.Plugins },
                         onCodexLogin = {
                             // PRoot shares Android's network namespace, so Chrome can return
                             // directly to Codex's localhost callback. This avoids the device-code
@@ -325,6 +327,18 @@ private fun PandoraApp() {
                             chatManager.stopAll()
                             sessionManager.stopAll()
                         },
+                    )
+                    Screen.Plugins -> PluginsScreen(
+                        state = adbState,
+                        onBack = { screen = Screen.Settings },
+                        onOpenSetup = { screen = Screen.AdbSetup },
+                        onEnabledChange = context.adbPlugin::setEnabled,
+                    )
+                    Screen.AdbSetup -> AdbSetupScreen(
+                        state = adbState,
+                        onBack = { screen = Screen.Plugins },
+                        onBeginPairing = context.adbPlugin::beginPairing,
+                        onRetry = context.adbPlugin::retry,
                     )
                     Screen.Archive -> ArchiveScreen(onBack = { screen = Screen.Settings })
                 }

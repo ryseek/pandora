@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1120" viewBox="0 0 1800 1120">
+  <defs>
+    <linearGradient id="pandoraWave" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6E5AEF"/>
+      <stop offset=".28" stop-color="#A758E8"/>
+      <stop offset=".56" stop-color="#E95D8F"/>
+      <stop offset=".78" stop-color="#F2A24B"/>
+      <stop offset="1" stop-color="#69BFA7"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-20%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#28203E" flood-opacity=".13"/>
+    </filter>
+    <clipPath id="clip1"><rect x="70" y="168" width="378" height="818" rx="38"/></clipPath>
+    <clipPath id="clip2"><rect x="498" y="168" width="378" height="818" rx="38"/></clipPath>
+    <clipPath id="clip3"><rect x="926" y="168" width="378" height="818" rx="38"/></clipPath>
+    <clipPath id="clip4"><rect x="1354" y="168" width="378" height="818" rx="38"/></clipPath>
+    <style>
+      .ui { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1D1E1C; }
+      .title { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
+      .h1 { font-size: 20px; font-weight: 700; }
+      .h2 { font-size: 16px; font-weight: 700; }
+      .body { font-size: 13px; font-weight: 450; }
+      .small { font-size: 11px; font-weight: 500; }
+      .eyebrow { font-size: 10px; font-weight: 800; letter-spacing: 1.1px; fill: #6654D9; }
+      .muted { fill: #6B6D67; }
+      .white { fill: #FFFFFF; }
+      .line { stroke: #E7E7E1; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1120" fill="#F3F1F7"/>
+  <text x="70" y="65" class="ui" font-size="30" font-weight="760" letter-spacing="-.6">Pandora plugins · ADB phone control</text>
+  <text x="70" y="98" class="ui muted" font-size="15">Configuration and live-control safety concept · wireframe v1</text>
+
+  <g class="ui">
+    <text x="70" y="145" class="eyebrow">01 · DISCOVER</text>
+    <text x="498" y="145" class="eyebrow">02 · ENABLE</text>
+    <text x="926" y="145" class="eyebrow">03 · CONNECT</text>
+    <text x="1354" y="145" class="eyebrow">04 · CONTROL</text>
+  </g>
+
+  <!-- Device 1: Settings entry -->
+  <g filter="url(#shadow)"><rect x="70" y="168" width="378" height="818" rx="38" fill="#FAFAF7"/></g>
+  <g clip-path="url(#clip1)" class="ui">
+    <text x="93" y="205" font-size="12" font-weight="650">09:46</text>
+    <circle cx="414" cy="200" r="4" fill="#1D1E1C"/><path d="M399 204h10M401 200h6M403 196h2" stroke="#1D1E1C" stroke-width="1.8" fill="none"/>
+    <g transform="translate(93 231)"><circle cx="22" cy="22" r="22" fill="#F0F0EB"/><path d="M29 22H15m0 0 6-6m-6 6 6 6" fill="none" stroke="#1D1E1C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="145" y="268" class="title">Settings</text>
+    <line x1="70" y1="292" x2="448" y2="292" class="line"/>
+
+    <text x="94" y="339" class="eyebrow">APPEARANCE</text>
+    <text x="94" y="376" class="h2">Theme</text><text x="94" y="398" class="body muted">Follow the device or choose a look.</text>
+    <rect x="94" y="418" width="330" height="48" rx="14" fill="#F0F0EB"/>
+    <rect x="99" y="423" width="102" height="38" rx="11" fill="#FFFFFF"/>
+    <text x="126" y="447" class="body" font-weight="650">System</text><text x="235" y="447" class="body muted">Light</text><text x="344" y="447" class="body muted">Dark</text>
+
+    <text x="94" y="525" class="eyebrow">PLUGINS</text>
+    <text x="94" y="548" class="small muted">Extend what Pandora can do on this device.</text>
+    <g transform="translate(94 572)">
+      <rect width="330" height="82" rx="16" fill="#F0F0EB"/>
+      <rect x="14" y="18" width="46" height="46" rx="13" fill="#E9E5FF"/>
+      <path d="M30 31v10m14-10v10M27 40h20v4c0 6-4 10-10 10s-10-4-10-10v-4Z" fill="none" stroke="#6654D9" stroke-width="2" stroke-linecap="round"/>
+      <text x="75" y="34" class="h2">Plugins</text>
+      <text x="75" y="55" class="body muted">1 available · none enabled</text>
+      <path d="M302 34l7 7-7 7" fill="none" stroke="#777970" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(94 676)">
+      <circle cx="17" cy="17" r="17" fill="#E9E5FF"/>
+      <path d="M17 9v9m0 5v2" stroke="#6654D9" stroke-width="2" stroke-linecap="round"/>
+      <text x="45" y="13" class="small" font-weight="700">You stay in control</text>
+      <text x="45" y="31" class="small muted">Every control plugin has a visible stop action.</text>
+    </g>
+    <rect x="229" y="963" width="60" height="4" rx="2" fill="#696A66"/>
+  </g>
+
+  <!-- Device 2: Plugin details -->
+  <g filter="url(#shadow)"><rect x="498" y="168" width="378" height="818" rx="38" fill="#FAFAF7"/></g>
+  <g clip-path="url(#clip2)" class="ui">
+    <text x="521" y="205" font-size="12" font-weight="650">09:46</text>
+    <g transform="translate(521 231)"><circle cx="22" cy="22" r="22" fill="#F0F0EB"/><path d="M29 22H15m0 0 6-6m-6 6 6 6" fill="none" stroke="#1D1E1C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="573" y="268" class="title">Plugins</text><line x1="498" y1="292" x2="876" y2="292" class="line"/>
+    <text x="522" y="336" class="body muted">Plugins ask before taking control of your device.</text>
+
+    <rect x="522" y="370" width="330" height="262" rx="18" fill="#FFFFFF" stroke="#E0E0D9"/>
+    <rect x="542" y="390" width="52" height="52" rx="15" fill="#E9E5FF"/>
+    <path d="M559 406v11m18-11v11m-22-1h26v5c0 7-5 12-13 12s-13-5-13-12v-5Z" fill="none" stroke="#6654D9" stroke-width="2.2" stroke-linecap="round"/>
+    <text x="608" y="409" class="h2">ADB phone control</text>
+    <text x="608" y="431" class="small muted">By Pandora · device plugin</text>
+    <rect x="782" y="397" width="48" height="28" rx="14" fill="#DADBD5"/><circle cx="796" cy="411" r="10" fill="#FFFFFF"/>
+    <text x="542" y="475" class="body" font-weight="600">Let the Pandora agent control this phone</text>
+    <text x="542" y="498" class="body muted">Connects through Android Debug Bridge on localhost.</text>
+    <line x1="542" y1="526" x2="832" y2="526" class="line"/>
+    <circle cx="551" cy="552" r="3.5" fill="#6654D9"/><text x="564" y="556" class="small">Tap, type, swipe, open apps</text>
+    <circle cx="551" cy="579" r="3.5" fill="#6654D9"/><text x="564" y="583" class="small">Visible border while control is active</text>
+
+    <rect x="522" y="662" width="330" height="52" rx="15" fill="#6654D9"/>
+    <text x="687" y="694" class="body white" text-anchor="middle" font-weight="750">Enable and set up</text>
+    <text x="687" y="748" class="small muted" text-anchor="middle">You can disable this plugin at any time.</text>
+    <rect x="657" y="963" width="60" height="4" rx="2" fill="#696A66"/>
+  </g>
+
+  <!-- Device 3: Setup -->
+  <g filter="url(#shadow)"><rect x="926" y="168" width="378" height="818" rx="38" fill="#FAFAF7"/></g>
+  <g clip-path="url(#clip3)" class="ui">
+    <text x="949" y="205" font-size="12" font-weight="650">09:46</text>
+    <g transform="translate(949 231)"><circle cx="22" cy="22" r="22" fill="#F0F0EB"/><path d="M29 22H15m0 0 6-6m-6 6 6 6" fill="none" stroke="#1D1E1C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="1001" y="260" class="h1">Connect phone</text><text x="1001" y="279" class="small muted">ADB phone control</text><line x1="926" y1="292" x2="1304" y2="292" class="line"/>
+    <g transform="translate(950 320)">
+      <circle cx="14" cy="14" r="14" fill="#6654D9"/><path d="M8 14l4 4 8-9" fill="none" stroke="#FFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="28" y1="14" x2="94" y2="14" stroke="#6654D9" stroke-width="3"/>
+      <circle cx="108" cy="14" r="14" fill="#6654D9"/><text x="108" y="18" class="small white" text-anchor="middle" font-weight="800">2</text>
+      <line x1="122" y1="14" x2="188" y2="14" stroke="#D8D9D2" stroke-width="3"/>
+      <circle cx="202" cy="14" r="14" fill="#F0F0EB"/><text x="202" y="18" class="small muted" text-anchor="middle" font-weight="800">3</text>
+      <text x="0" y="47" class="small muted">Allow</text><text x="87" y="47" class="small" font-weight="700">Pair</text><text x="179" y="47" class="small muted">Verify</text>
+    </g>
+    <text x="950" y="410" class="h1">Pair with Wireless debugging</text>
+    <text x="950" y="434" class="body muted">On this phone, open:</text>
+    <rect x="950" y="454" width="330" height="50" rx="13" fill="#F0F0EB"/>
+    <text x="967" y="476" class="small" font-weight="700">Settings → Developer options</text>
+    <text x="967" y="494" class="small muted">Wireless debugging → Pair with pairing code</text>
+    <text x="950" y="540" class="body" font-weight="650">Enter the details shown by Android</text>
+    <text x="950" y="575" class="small muted">Pairing port</text><text x="1126" y="575" class="small muted">6-digit code</text>
+    <rect x="950" y="586" width="154" height="52" rx="12" fill="#FFFFFF" stroke="#D8D9D2"/><text x="967" y="618" class="body muted">00000</text>
+    <rect x="1126" y="586" width="154" height="52" rx="12" fill="#FFFFFF" stroke="#D8D9D2"/><text x="1143" y="618" class="body muted">000 000</text>
+    <rect x="950" y="662" width="330" height="52" rx="15" fill="#6654D9"/><text x="1115" y="694" class="body white" text-anchor="middle" font-weight="750">Pair and test</text>
+    <text x="1115" y="766" class="small muted" text-anchor="middle">Having trouble? Open setup help</text>
+    <rect x="1085" y="963" width="60" height="4" rx="2" fill="#696A66"/>
+  </g>
+
+  <!-- Device 4: Active control -->
+  <g filter="url(#shadow)"><rect x="1354" y="168" width="378" height="818" rx="38" fill="#FAFAF7"/></g>
+  <g clip-path="url(#clip4)" class="ui">
+    <rect x="1354" y="168" width="378" height="818" fill="#F7F7F4"/>
+    <text x="1377" y="205" font-size="12" font-weight="650">09:46</text>
+    <path d="M1682 204h10m-8-4h6m-4-4h2" stroke="#1D1E1C" stroke-width="1.8" fill="none"/>
+    <text x="1382" y="283" font-size="28" font-weight="760">Tuesday</text><text x="1382" y="306" class="body muted">11 August</text>
+    <rect x="1382" y="339" width="322" height="126" rx="22" fill="#E9E5FF"/>
+    <circle cx="1418" cy="375" r="17" fill="#6654D9"/><path d="M1411 375h14m-7-7v14" stroke="#FFF" stroke-width="2" stroke-linecap="round"/>
+    <text x="1447" y="370" class="h2">Continue in Pandora</text><text x="1447" y="392" class="body muted">Agent is working in Settings</text>
+    <rect x="1402" y="419" width="112" height="30" rx="15" fill="#FFFFFF"/><text x="1458" y="439" class="small" text-anchor="middle" font-weight="700">View activity</text>
+
+    <g transform="translate(1390 511)">
+      <rect x="0" y="0" width="64" height="64" rx="18" fill="#FFFFFF"/><circle cx="32" cy="32" r="13" fill="#69BFA7"/><path d="M26 32h12m-6-6v12" stroke="#FFF" stroke-width="2" stroke-linecap="round"/>
+      <rect x="82" y="0" width="64" height="64" rx="18" fill="#FFFFFF"/><path d="M102 22h24v20h-24z" fill="none" stroke="#6E5AEF" stroke-width="2"/><path d="M102 28h24" stroke="#6E5AEF" stroke-width="2"/>
+      <rect x="164" y="0" width="64" height="64" rx="18" fill="#FFFFFF"/><circle cx="196" cy="32" r="13" fill="#F2A24B"/><path d="M190 32h12" stroke="#FFF" stroke-width="2"/>
+      <rect x="246" y="0" width="64" height="64" rx="18" fill="#FFFFFF"/><path d="M269 22h18v22h-18z" fill="none" stroke="#E95D8F" stroke-width="2"/><path d="M273 27h10m-10 5h10m-10 5h6" stroke="#E95D8F" stroke-width="1.5"/>
+    </g>
+    <rect x="1468" y="908" width="150" height="50" rx="25" fill="#FAFAF7" stroke="#6654D9" stroke-width="2.5"/>
+    <path d="M1512 927l12 12m0-12-12 12" fill="none" stroke="#6654D9" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="1540" y="940" class="body" fill="#6654D9" font-weight="780">Stop</text>
+    <rect x="1513" y="963" width="60" height="4" rx="2" fill="#FFFFFF"/>
+  </g>
+  <rect x="1357" y="171" width="372" height="812" rx="35" fill="none" stroke="url(#pandoraWave)" stroke-width="5"/>
+
+  <g class="ui">
+    <text x="70" y="1042" class="body" font-weight="700">Safety model</text>
+    <text x="70" y="1067" class="body muted">Enable once → approve each session → always-visible color frame → one-tap stop.</text>
+    <rect x="1377" y="1026" width="14" height="14" rx="4" fill="url(#pandoraWave)"/>
+    <text x="1402" y="1038" class="small" font-weight="700">Pandora wave frame</text>
+    <text x="1402" y="1059" class="small muted">5 px · animated in product · never used for passive states</text>
+  </g>
+</svg>

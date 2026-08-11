@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.DeveloperMode
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Memory
@@ -92,6 +93,7 @@ fun SettingsScreen(
     onThemePreferenceChanged: (AppSettings.ThemePreference) -> Unit,
     onBack: () -> Unit,
     onArchive: () -> Unit,
+    onPlugins: () -> Unit,
     onCodexLogin: () -> Unit,
     onStopAllForRepair: () -> Unit,
 ) {
@@ -263,6 +265,26 @@ fun SettingsScreen(
                     modifier = Modifier.size(20.dp),
                 )
             }
+
+            Spacer(Modifier.height(30.dp))
+            Text("PLUGINS", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Extend what Pandora can do on this device.",
+                color = SettingsMuted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            SettingsAction(
+                title = "Plugins",
+                subtitle = if (AppSettings.adbPluginEnabled(context)) "ADB phone control enabled" else "1 available · none enabled",
+                icon = { tint ->
+                    Icon(Icons.Rounded.DeveloperMode, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                },
+                enabled = true,
+                onClick = onPlugins,
+            )
 
             Spacer(Modifier.height(30.dp))
             Text("VOICE", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)

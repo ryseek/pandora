@@ -14,7 +14,7 @@ This milestone includes:
 - a foreground Linux-session service that keeps the PTY and network alive while Pandora is briefly backgrounded;
 - multiple retained terminal sessions with preserved scrollback, explicit Stop controls, and navigation that leaves processes running;
 - pinned, checksum-verified zmx 0.7.0 for named terminal attach/detach, restored terminal state, and detached-session discovery;
-- reproducible default packages after install and Repair (`ca-certificates`, `util-linux`, `nodejs`, `npm`, `git`, `ripgrep`);
+- reproducible default packages after install and Repair (`ca-certificates`, `curl`, `util-linux`, `nodejs`, `npm`, `git`, `ripgrep`, `adb`);
 - a persistent Codex CLI installation under `/root/.local`, preserved across Repair;
 - device-aware Codex instructions in persistent `/root/.codex/AGENTS.md`, installed without overwriting user edits;
 - a PRoot-compatible Codex full-access default, avoiding unsupported Bubblewrap/user-namespace sandboxing;
@@ -25,6 +25,7 @@ This milestone includes:
 - a Settings helper that opens Codex browser login and keeps the OAuth exchange active in the background;
 - versioned workspace backup and staged restore from Settings, including projects, configuration, credentials, executable bits, and symlinks;
 - package installation and network access from the container.
+- a loopback-only agent bridge for visible phone-control sessions and user-requested completion notifications.
 
 ## Build
 
@@ -73,6 +74,8 @@ This is a userspace Linux environment sharing Android's kernel, not a VM and not
 Codex runs with `sandbox_mode = "danger-full-access"` because Android's PRoot environment cannot provide the user namespaces and `/proc/sys` access required by Bubblewrap. Codex commands can therefore read and modify the complete Pandora Linux workspace without an additional sandbox boundary.
 
 Pandora also installs global Codex guidance at `/root/.codex/AGENTS.md` from the APK on first setup. These instructions give every chat and project basic context about Android, Debian, PRoot, persistent storage, Repair behavior, and runtime limitations. An existing file is left untouched so users can customize or replace the guidance, while project-level `AGENTS.md` files can add more specific instructions.
+
+The local agent API is documented in [docs/agent-bridge.md](docs/agent-bridge.md).
 
 Workspace backups are portable ZIP files containing the complete persistent `/root`. They therefore contain sensitive Codex and GitHub sessions and should be stored accordingly. Restore validates and extracts into staging before atomically replacing the current workspace.
 
