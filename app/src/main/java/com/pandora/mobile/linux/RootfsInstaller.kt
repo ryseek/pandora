@@ -13,14 +13,13 @@ import java.util.WeakHashMap
 import java.util.zip.GZIPInputStream
 
 class RootfsInstaller(private val context: Context) {
-    val rootfs = File(context.filesDir, "alpine-rootfs")
+    val rootfs = File(context.filesDir, "debian-rootfs")
     val workspace = File(context.filesDir, "linux-workspace")
     val proot = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
     val nativeLibDir = File(context.applicationInfo.nativeLibraryDir)
     val tempDir = File(context.cacheDir, "proot-tmp")
-    private val marker = File(rootfs, ".pandora-rootfs-v1")
-    private val defaultPackagesMarker = File(rootfs, ".pandora-default-packages-v2")
-    private val workspaceMarker = File(context.filesDir, ".pandora-workspace-v1")
+    private val marker = File(rootfs, ".pandora-rootfs-v2")
+    private val defaultPackagesMarker = File(rootfs, ".pandora-default-packages-v3")
 
     fun installIfNeeded(onStatus: (String) -> Unit) {
         synchronized(INSTALL_LOCK) {
@@ -31,7 +30,7 @@ class RootfsInstaller(private val context: Context) {
             check(proot.exists()) { "Bundled PRoot runtime is missing" }
 
             if (!marker.exists()) {
-                onStatus("Installing Alpine Linux…")
+                onStatus("Installing Debian Linux…")
                 installFreshRootfs()
             }
             installDefaultPackages(onStatus)
@@ -49,7 +48,7 @@ class RootfsInstaller(private val context: Context) {
             ensureAgentKnowledge()
             ensureCodexDefaults()
             check(proot.exists()) { "Bundled PRoot runtime is missing" }
-            onStatus("Repairing Alpine Linux…")
+            onStatus("Repairing Debian Linux…")
             installFreshRootfs()
             installDefaultPackages(onStatus)
             installZmxIfNeeded(onStatus)
@@ -61,8 +60,8 @@ class RootfsInstaller(private val context: Context) {
     private fun installFreshRootfs() {
         if (rootfs.exists()) rootfs.deleteRecursively()
         rootfs.mkdirs()
-        context.assets.open("alpine-minirootfs.tar").use { input ->
-            extractTar(input, rootfs)
+        context.assets.open("debian-rootfs-arm64.tgz").buffered().use { compressed ->
+            GZIPInputStream(compressed).use { input -> extractTar(input, rootfs) }
         }
 
         File(rootfs, "root").mkdirs()
@@ -73,7 +72,7 @@ class RootfsInstaller(private val context: Context) {
             setExecutable(true, false)
         }
         File(rootfs, "etc/resolv.conf").writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
-        marker.writeText("aarch64\n")
+        marker.writeText("debian-trixie-arm64\n")
     }
 
     /** Applies the same baseline after first install and every system repair. */
@@ -81,29 +80,31 @@ class RootfsInstaller(private val context: Context) {
         if (defaultPackagesMarker.exists()) return
         onStatus("Installing SSL and Linux utilities…")
 
-        val command = mutableListOf(
-            proot.absolutePath,
-            "-0",
-            "--link2symlink",
-            "-r", rootfs.absolutePath,
-            "-b", "/dev",
-            "-b", "/proc",
-            "-b", "/sys",
-            "-b", "${workspace.absolutePath}:/root",
-            "-w", "/root",
-            "/sbin/apk", "add", "--no-cache",
-        ).apply { addAll(DEFAULT_PACKAGES) }
+        val (updateExitCode, updateOutput) = runContainerCommand(
+            containerCommand("/usr/bin/apt-get", "update"),
+        )
+        if (updateExitCode != 0) {
+            Log.w(TAG, "Package index update deferred (exit $updateExitCode): $updateOutput")
+            onStatus("Utilities pending; starting offline…")
+            return
+        }
 
-        val process = startContainerProcess(command, mergeError = true)
-
-        val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-        val exitCode = process.waitFor()
-        if (exitCode == 0) {
+        val installCommand = containerCommand(
+            "/usr/bin/apt-get",
+            "install",
+            "-y",
+            "--no-install-recommends",
+            *DEFAULT_PACKAGES.toTypedArray(),
+        )
+        val (installExitCode, installOutput) = runContainerCommand(installCommand)
+        if (installExitCode == 0) {
+            runContainerCommand(containerCommand("/usr/bin/apt-get", "clean"))
+            File(rootfs, "var/lib/apt/lists").listFiles().orEmpty().forEach { it.deleteRecursively() }
             defaultPackagesMarker.writeText(DEFAULT_PACKAGES.joinToString("\n", postfix = "\n"))
         } else {
             // An offline first launch should still reach a shell. With no marker,
             // the exact same manifest is retried automatically on the next launch.
-            Log.w(TAG, "Default package install deferred (exit $exitCode): $output")
+            Log.w(TAG, "Default package install deferred (exit $installExitCode): $installOutput")
             onStatus("Utilities pending; starting offline…")
         }
     }
@@ -259,8 +260,11 @@ class RootfsInstaller(private val context: Context) {
                 put("PROOT_LOADER_32", File(nativeLibDir, "libproot-loader32.so").absolutePath)
                 put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
                 put("HOME", "/root")
+                put("TMPDIR", "/tmp")
                 put("ZMX_DIR", "/root/.local/state/zmx/sessions")
                 put("TERM", "dumb")
+                put("DEBIAN_FRONTEND", "noninteractive")
+                put("LANG", "C.UTF-8")
                 put(PROCESS_IDENTITY_ENV, processIdentity)
             }
         }.start()
@@ -343,27 +347,9 @@ class RootfsInstaller(private val context: Context) {
         return process.waitFor() to output
     }
 
-    /** One-time migration from the original monolithic rootfs into durable user storage. */
     private fun ensurePersistentWorkspace(onStatus: (String) -> Unit) {
-        if (workspaceMarker.exists()) {
-            workspace.mkdirs()
-            return
-        }
-
-        onStatus("Preserving workspace…")
-        workspace.mkdirs()
-        val oldHome = File(rootfs, "root")
-        if (oldHome.isDirectory) {
-            oldHome.listFiles().orEmpty().forEach { source ->
-                val destination = File(workspace, source.name)
-                if (!destination.exists()) {
-                    check(source.copyRecursively(destination, overwrite = false)) {
-                        "Could not preserve ${source.name}"
-                    }
-                }
-            }
-        }
-        workspaceMarker.writeText("/root\n")
+        if (!workspace.exists()) onStatus("Preparing workspace…")
+        check(workspace.mkdirs() || workspace.isDirectory) { "Could not create persistent workspace" }
     }
 
     private fun extractTar(input: InputStream, target: File) {
@@ -466,8 +452,6 @@ class RootfsInstaller(private val context: Context) {
         val PROCESS_IDENTITIES = WeakHashMap<Process, String>()
         val DEFAULT_PACKAGES = listOf(
             "ca-certificates",
-            "ssl_client",
-            "lscpu",
             "util-linux",
             "nodejs",
             "npm",

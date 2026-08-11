@@ -227,7 +227,7 @@ fun TerminalScreen(
 
 private fun installProgress(status: String): Float = when {
     status.contains("workspace", ignoreCase = true) -> 0.12f
-    status.contains("Alpine", ignoreCase = true) -> 0.28f
+    status.contains("Debian", ignoreCase = true) -> 0.28f
     status.contains("SSL", ignoreCase = true) || status.contains("utilities", ignoreCase = true) -> 0.48f
     status.contains("terminal", ignoreCase = true) -> 0.66f
     status.contains("Codex", ignoreCase = true) -> 0.84f

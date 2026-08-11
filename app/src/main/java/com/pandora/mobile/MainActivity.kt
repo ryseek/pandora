@@ -54,6 +54,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -121,6 +122,7 @@ import com.pandora.mobile.linux.CodexChatState
 import com.pandora.mobile.linux.CodexThreadCatalog
 import com.pandora.mobile.linux.CodexThreadSummary
 import com.pandora.mobile.linux.CodexUsageReader
+import com.pandora.mobile.linux.ArchiveCatalog
 import com.pandora.mobile.linux.PtyTerminalSession
 import com.pandora.mobile.linux.PandoraProject
 import com.pandora.mobile.linux.ProjectCatalog
@@ -144,7 +146,7 @@ private val AccentSurface: Color @Composable get() = MaterialTheme.colorScheme.p
 private val Terminal = Color(0xFF111210)
 private val TerminalText = Color(0xFFD8E4D1)
 
-private enum class Screen { Home, Chat, Container, Settings }
+private enum class Screen { Home, Chat, Container, Settings, Archive }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -262,6 +264,7 @@ private fun PandoraApp() {
                             themePreference = it
                         },
                         onBack = { screen = settingsReturnScreen },
+                        onArchive = { screen = Screen.Archive },
                         onCodexLogin = {
                             // PRoot shares Android's network namespace, so Chrome can return
                             // directly to Codex's localhost callback. This avoids the device-code
@@ -274,6 +277,7 @@ private fun PandoraApp() {
                             sessionManager.stopAll()
                         },
                     )
+                    Screen.Archive -> ArchiveScreen(onBack = { screen = Screen.Settings })
                 }
             }
         }
@@ -301,15 +305,19 @@ private fun HomeScreen(
     val context = LocalContext.current.applicationContext
     val chatCatalog = remember(context) { CodexThreadCatalog(context) }
     val projectCatalog = remember(context) { ProjectCatalog(context) }
+    val archiveCatalog = remember(context) { ArchiveCatalog(context) }
     var limitState by remember { mutableStateOf<CodexLimitsState>(CodexLimitsState.Loading) }
     var limitRefresh by remember { mutableStateOf(0) }
     var chats by remember(chatCatalog) { mutableStateOf(chatCatalog.readCached()) }
     var registeredProjects by remember(projectCatalog) { mutableStateOf(projectCatalog.readRegistered()) }
+    var archive by remember(archiveCatalog) { mutableStateOf(archiveCatalog.read()) }
     var persistentTerminals by remember { mutableStateOf<List<String>>(emptyList()) }
     var catalogLoading by remember { mutableStateOf(chats.isEmpty()) }
     var renameEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
-    var deleteEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var removeEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var deleteChat by remember { mutableStateOf<CodexThreadSummary?>(null) }
     var renameProject by remember { mutableStateOf<PandoraProject?>(null) }
+    var archiveProject by remember { mutableStateOf<PandoraProject?>(null) }
     var deleteProject by remember { mutableStateOf<PandoraProject?>(null) }
     var actionInFlight by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
@@ -332,12 +340,16 @@ private fun HomeScreen(
         loaded.second?.let { chats = it }
         loaded.third?.let { persistentTerminals = it }
         registeredProjects = withContext(Dispatchers.IO) { projectCatalog.readRegistered() }
+        archive = withContext(Dispatchers.IO) { archiveCatalog.read() }
         catalogLoading = false
     }
 
-    val entries = remember(chats, sessions, persistentTerminals, revision) {
+    val activeChats = remember(chats, archive) {
+        chats.filterNot { it.id in archive.chatIds || it.cwd in archive.projectPaths }
+    }
+    val entries = remember(activeChats, sessions, persistentTerminals, revision) {
         buildList<WorkspaceEntry> {
-            chats.forEach { add(WorkspaceEntry.Chat(it)) }
+            activeChats.forEach { add(WorkspaceEntry.Chat(it)) }
             sessions.forEach { add(WorkspaceEntry.TerminalSession(it)) }
             val attachedNames = sessions.mapTo(mutableSetOf()) { it.persistentSessionName }
             persistentTerminals.filterNot(attachedNames::contains).forEach {
@@ -345,16 +357,17 @@ private fun HomeScreen(
             }
         }.sortedByDescending { it.updatedAtMillis }
     }
-    val projects = remember(chats, registeredProjects) {
-        val registeredByPath = registeredProjects.associateBy { it.path }
-        (registeredProjects.map { it.path } + chats.map { it.cwd }.filter { it != "/root" })
+    val projects = remember(activeChats, registeredProjects, archive) {
+        val visibleRegistered = registeredProjects.filterNot { it.path in archive.projectPaths }
+        val registeredByPath = visibleRegistered.associateBy { it.path }
+        (visibleRegistered.map { it.path } + activeChats.map { it.cwd }.filter { it != "/root" })
             .distinct()
             .filter { it.startsWith("/root/") }
             .map { registeredByPath[it] ?: PandoraProject(it) }
             .sortedWith(
                 compareByDescending<PandoraProject> { it.pinned }
                     .thenByDescending { project ->
-                        chats.filter { it.cwd == project.path }.maxOfOrNull { it.updatedAtMillis } ?: 0L
+                        activeChats.filter { it.cwd == project.path }.maxOfOrNull { it.updatedAtMillis } ?: 0L
                     }
                     .thenBy { it.name.lowercase() },
             )
@@ -363,9 +376,9 @@ private fun HomeScreen(
     LaunchedEffect(projectPaths) {
         expandedProjects = expandedProjects + projectPaths
     }
-    val projectChats = remember(chats, projectPaths) {
+    val projectChats = remember(activeChats, projectPaths) {
         projectPaths.associateWith { path ->
-            chats.filter { it.cwd == path }.map(WorkspaceEntry::Chat)
+            activeChats.filter { it.cwd == path }.map(WorkspaceEntry::Chat)
         }
     }
     val otherEntries = remember(entries, projectPaths) {
@@ -446,6 +459,7 @@ private fun HomeScreen(
                                 }.onFailure { actionError = it.message ?: "Could not update this project" }
                             }
                         },
+                        onArchive = { archiveProject = project; actionError = null },
                         onDelete = { deleteProject = project; actionError = null },
                     )
                 }
@@ -469,9 +483,13 @@ private fun HomeScreen(
                                 actionError = null
                                 renameEntry = entry
                             },
+                            onArchive = {
+                                actionError = null
+                                removeEntry = entry
+                            },
                             onDelete = {
                                 actionError = null
-                                deleteEntry = entry
+                                deleteChat = entry.chat
                             },
                         )
                     }
@@ -496,9 +514,13 @@ private fun HomeScreen(
                             actionError = null
                             renameEntry = entry
                         },
+                        onArchive = if (entry is WorkspaceEntry.Chat) ({
+                            actionError = null
+                            removeEntry = entry
+                        }) else null,
                         onDelete = {
                             actionError = null
-                            deleteEntry = entry
+                            if (entry is WorkspaceEntry.Chat) deleteChat = entry.chat else removeEntry = entry
                         },
                     )
                 }
@@ -592,6 +614,40 @@ private fun HomeScreen(
         )
     }
 
+    archiveProject?.let { project ->
+        ArchiveProjectDialog(
+            project = project,
+            chatCount = chats.count { it.cwd == project.path },
+            loading = actionInFlight,
+            error = actionError,
+            onDismiss = {
+                if (!actionInFlight) {
+                    archiveProject = null
+                    actionError = null
+                }
+            },
+            onArchive = {
+                actionScope.launch {
+                    actionInFlight = true
+                    actionError = null
+                    val projectChatIds = chats.filter { it.cwd == project.path }.map { it.id }
+                    projectChatIds.forEach(onStopChat)
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching { archiveCatalog.setProjectArchived(project.path, true) }
+                    }
+                    actionInFlight = false
+                    result.onSuccess { updated ->
+                        archive = updated
+                        expandedProjects = expandedProjects - project.path
+                        archiveProject = null
+                    }.onFailure {
+                        actionError = it.message ?: "Could not archive this project"
+                    }
+                }
+            },
+        )
+    }
+
     deleteProject?.let { project ->
         DeleteProjectDialog(
             project = project,
@@ -614,10 +670,13 @@ private fun HomeScreen(
                         runCatching {
                             projectChatIds.forEach(chatCatalog::delete)
                             projectCatalog.remove(project.path)
+                            archiveCatalog.setProjectArchived(project.path, false)
+                            archiveCatalog.removeChats(projectChatIds)
                         }
                     }
                     actionInFlight = false
-                    result.onSuccess {
+                    result.onSuccess { updated ->
+                        archive = updated
                         chats = chats.filterNot { it.id in projectChatIds }
                         registeredProjects = registeredProjects.filterNot { it.path == project.path }
                         expandedProjects = expandedProjects - project.path
@@ -673,42 +732,77 @@ private fun HomeScreen(
         )
     }
 
-    deleteEntry?.let { entry ->
-        DeleteEntryDialog(
+    removeEntry?.let { entry ->
+        RemoveEntryDialog(
             entry = entry,
             loading = actionInFlight,
             error = actionError,
             onDismiss = {
                 if (!actionInFlight) {
-                    deleteEntry = null
+                    removeEntry = null
                     actionError = null
                 }
             },
-            onDelete = {
+            onRemove = {
                 when (entry) {
                     is WorkspaceEntry.Chat -> actionScope.launch {
                         actionInFlight = true
                         actionError = null
                         onStopChat(entry.chat.id)
                         val result = withContext(Dispatchers.IO) {
-                            runCatching { chatCatalog.delete(entry.chat.id) }
+                            runCatching { archiveCatalog.setChatArchived(entry.chat.id, true) }
                         }
                         actionInFlight = false
-                        result.onSuccess {
-                            chats = chats.filterNot { it.id == entry.chat.id }
-                            deleteEntry = null
+                        result.onSuccess { updated ->
+                            archive = updated
+                            removeEntry = null
                         }.onFailure {
-                            actionError = it.message ?: "Could not delete this chat. Try again."
+                            actionError = it.message ?: "Could not archive this chat. Try again."
                         }
                     }
                     is WorkspaceEntry.TerminalSession -> {
                         onDeleteTerminal(entry.session)
-                        deleteEntry = null
+                        removeEntry = null
                     }
                     is WorkspaceEntry.PersistentTerminal -> {
                         onDeletePersistentTerminal(entry.name)
                         persistentTerminals = persistentTerminals.filterNot { it == entry.name }
-                        deleteEntry = null
+                        removeEntry = null
+                    }
+                }
+            },
+        )
+    }
+
+    deleteChat?.let { chat ->
+        DeleteChatDialog(
+            chat = chat,
+            loading = actionInFlight,
+            error = actionError,
+            onDismiss = {
+                if (!actionInFlight) {
+                    deleteChat = null
+                    actionError = null
+                }
+            },
+            onDelete = {
+                actionScope.launch {
+                    actionInFlight = true
+                    actionError = null
+                    onStopChat(chat.id)
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            chatCatalog.delete(chat.id)
+                            archiveCatalog.setChatArchived(chat.id, false)
+                        }
+                    }
+                    actionInFlight = false
+                    result.onSuccess { updated ->
+                        archive = updated
+                        chats = chats.filterNot { it.id == chat.id }
+                        deleteChat = null
+                    }.onFailure {
+                        actionError = it.message ?: "Could not delete this chat. Try again."
                     }
                 }
             },
@@ -758,6 +852,7 @@ private fun ProjectHeader(
     onToggle: () -> Unit,
     onRename: () -> Unit,
     onPin: () -> Unit,
+    onArchive: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -846,6 +941,10 @@ private fun ProjectHeader(
                 ProjectMenuItem(Icons.Rounded.PushPin, if (project.pinned) "Unpin" else "Pin") {
                     menuExpanded = false
                     onPin()
+                }
+                ProjectMenuItem(Icons.Rounded.Archive, "Archive") {
+                    menuExpanded = false
+                    onArchive()
                 }
                 ProjectMenuItem(Icons.Rounded.Delete, "Delete", destructive = true) {
                     menuExpanded = false
@@ -1156,6 +1255,49 @@ private fun RenameProjectDialog(
 }
 
 @Composable
+private fun ArchiveProjectDialog(
+    project: PandoraProject,
+    chatCount: Int,
+    loading: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onArchive: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Archive ${project.name}?") },
+        text = {
+            Column {
+                Text(
+                    if (chatCount == 0) {
+                        "This hides the project from Home. You can restore it anytime from Settings → Archive."
+                    } else {
+                        "This hides the project and its $chatCount ${if (chatCount == 1) "chat" else "chats"} from Home. Nothing is deleted."
+                    },
+                )
+                if (error != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(error, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onArchive, enabled = !loading) {
+                if (loading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    if (loading) "Archiving…" else "Archive",
+                    color = if (loading) Muted else Accent,
+                )
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Cancel") } },
+    )
+}
+
+@Composable
 private fun DeleteProjectDialog(
     project: PandoraProject,
     chatCount: Int,
@@ -1268,15 +1410,15 @@ private fun RenameEntryDialog(
 }
 
 @Composable
-private fun DeleteEntryDialog(
+private fun RemoveEntryDialog(
     entry: WorkspaceEntry,
     loading: Boolean,
     error: String?,
     onDismiss: () -> Unit,
-    onDelete: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     val detail = when (entry) {
-        is WorkspaceEntry.Chat -> "This permanently deletes the conversation. This cannot be undone."
+        is WorkspaceEntry.Chat -> "This hides the conversation from Home. You can restore it anytime from Settings → Archive."
         is WorkspaceEntry.TerminalSession -> when (entry.session.state.value) {
             PtyTerminalSession.State.PREPARING, PtyTerminalSession.State.RUNNING ->
                 "This ends the running shell and removes its terminal output. Files in /root remain saved."
@@ -1288,10 +1430,50 @@ private fun DeleteEntryDialog(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Delete ${entry.typeLabel()}?") },
+        title = { Text(if (entry is WorkspaceEntry.Chat) "Archive chat?" else "Delete terminal?") },
         text = {
             Column {
                 Text(detail)
+                if (error != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(error, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onRemove, enabled = !loading) {
+                if (loading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    if (loading) {
+                        if (entry is WorkspaceEntry.Chat) "Archiving…" else "Deleting…"
+                    } else {
+                        if (entry is WorkspaceEntry.Chat) "Archive" else "Delete"
+                    },
+                    color = if (loading) Muted else if (entry is WorkspaceEntry.Chat) Accent else MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun DeleteChatDialog(
+    chat: CodexThreadSummary,
+    loading: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete ${chat.title}?") },
+        text = {
+            Column {
+                Text("This permanently deletes the conversation. This cannot be undone.")
                 if (error != null) {
                     Spacer(Modifier.height(10.dp))
                     Text(error, color = MaterialTheme.colorScheme.error)
@@ -1326,6 +1508,7 @@ private fun WorkspaceEntryRow(
     onRestartTerminal: (ManagedTerminalSession) -> Unit,
     onOpenPersistentTerminal: (String) -> Unit,
     onRename: () -> Unit,
+    onArchive: (() -> Unit)?,
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -1528,6 +1711,32 @@ private fun WorkspaceEntryRow(
                         onClick = {
                             menuExpanded = false
                             onStopChat(entry.chat.id)
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                    )
+                    Spacer(Modifier.height(2.dp))
+                }
+                if (onArchive != null) {
+                    DropdownMenuItem(
+                        text = {
+                            Text("Archive", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        },
+                        leadingIcon = {
+                            Box(
+                                Modifier.size(30.dp).background(AccentSurface, CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Archive,
+                                    contentDescription = null,
+                                    tint = Accent,
+                                    modifier = Modifier.size(17.dp),
+                                )
+                            }
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onArchive()
                         },
                         contentPadding = PaddingValues(horizontal = 10.dp),
                     )
@@ -2386,7 +2595,7 @@ private fun EmptyChatState(
 private fun InstallationProgress(detail: String, modifier: Modifier = Modifier) {
     val stages = listOf(
         "Prepare workspace",
-        "Install Alpine Linux",
+        "Install Debian Linux",
         "Add system utilities",
         "Configure terminal sessions",
         "Install Codex",
@@ -2394,7 +2603,7 @@ private fun InstallationProgress(detail: String, modifier: Modifier = Modifier) 
     )
     val stage = when {
         detail.contains("workspace", ignoreCase = true) -> 0
-        detail.contains("Alpine", ignoreCase = true) -> 1
+        detail.contains("Debian", ignoreCase = true) -> 1
         detail.contains("SSL", ignoreCase = true) || detail.contains("utilities", ignoreCase = true) -> 2
         detail.contains("terminal", ignoreCase = true) -> 3
         detail.contains("Codex", ignoreCase = true) -> 4

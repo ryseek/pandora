@@ -26,6 +26,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
@@ -85,6 +87,7 @@ fun SettingsScreen(
     themePreference: AppSettings.ThemePreference,
     onThemePreferenceChanged: (AppSettings.ThemePreference) -> Unit,
     onBack: () -> Unit,
+    onArchive: () -> Unit,
     onCodexLogin: () -> Unit,
     onStopAllForRepair: () -> Unit,
 ) {
@@ -224,6 +227,36 @@ fun SettingsScreen(
                     icon = { tint -> Icon(Icons.Rounded.DarkMode, null, tint = tint, modifier = Modifier.size(17.dp)) },
                     modifier = Modifier.weight(1f),
                     onClick = { onThemePreferenceChanged(AppSettings.ThemePreference.DARK) },
+                )
+            }
+
+            Spacer(Modifier.height(30.dp))
+            Text("LIBRARY", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onArchive)
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(42.dp).background(SettingsSoftSurface, RoundedCornerShape(13.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Archive, contentDescription = null, tint = SettingsAccent, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(13.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Archive", color = SettingsInk, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(3.dp))
+                    Text("Hidden chats and projects", color = SettingsMuted, fontSize = 13.sp)
+                }
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowForward,
+                    contentDescription = "Open archive",
+                    tint = SettingsMuted,
+                    modifier = Modifier.size(20.dp),
                 )
             }
 
@@ -448,7 +481,7 @@ fun SettingsScreen(
             Text("CONTAINER", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Maintenance for the Alpine Linux system. Your persistent /root workspace is stored separately.",
+                "Maintenance for the Debian Linux system. Your persistent /root workspace is stored separately.",
                 color = SettingsMuted,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
@@ -599,7 +632,7 @@ fun SettingsScreen(
                     repairError ?: if (repairing) {
                         repairStatus ?: "Preparing repair…"
                     } else {
-                        "All Linux sessions will stop. Alpine system files and installed packages will be reset. Files and projects in /root will remain untouched."
+                        "All Linux sessions will stop. Debian system files and installed packages will be reset. Files and projects in /root will remain untouched."
                     },
                 )
             },

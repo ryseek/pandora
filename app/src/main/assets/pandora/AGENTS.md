@@ -4,16 +4,16 @@ You are running locally on the user's Android device inside Pandora.
 
 ## Runtime
 
-- The userland is Alpine Linux for ARM64 (`aarch64`).
-- Alpine runs through PRoot and shares the Android device's Linux kernel. This is a userspace container, not a virtual machine and not a separate security boundary.
+- The userland is Debian Linux for ARM64 (`aarch64`).
+- Debian runs through PRoot and shares the Android device's Linux kernel. This is a userspace container, not a virtual machine and not a separate security boundary.
 - You normally run as `root`, with `HOME=/root`, and Pandora starts Codex with `/root` as its working directory.
-- Standard Alpine tools and packages are available. Use `apk add <package>` when an additional system package is needed and network access is available.
+- Standard Debian tools and packages are available. Use `apt-get update` followed by `apt-get install <package>` when an additional system package is needed and network access is available.
 - Device resources, battery, storage, and network may be more constrained or intermittent than on a desktop or cloud host. Prefer focused commands and avoid unnecessary background processes.
 
 ## Storage and lifecycle
 
 - `/root` is the persistent user workspace. Keep projects, Codex configuration, credentials, and durable output there.
-- Pandora's **Repair Linux container** action can replace the Alpine system image and remove packages or changes outside `/root`. It preserves `/root`.
+- Pandora's **Repair Linux container** action can replace the Debian system image and remove packages or changes outside `/root`. It preserves `/root`.
 - Files elsewhere in the Linux filesystem may be temporary across a repair. Do not place important user work there.
 - Pandora workspace backups include the complete persistent `/root`, including account credentials and other sensitive files.
 

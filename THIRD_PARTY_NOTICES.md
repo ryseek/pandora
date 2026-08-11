@@ -8,12 +8,17 @@ The Android runtime bundles PRoot from the OpenMinis project, which is derived f
 - Upstream: https://proot-me.github.io/
 - Runtime binary obtained from the OpenMinis 0.22-preview Android release.
 
-## Alpine Linux
+## Debian GNU/Linux
 
-The application bundles the Alpine Linux ARM64 minirootfs prepared by OpenMinis. Alpine packages are distributed under their respective licenses.
+The application bundles the ARM64 root filesystem layer from the official
+`debian:trixie-slim` container image. Debian packages are distributed under
+their respective licenses, with package copyright files included under
+`/usr/share/doc` in the root filesystem.
 
-- Source: https://alpinelinux.org/
-- Package license information: https://pkgs.alpinelinux.org/
+- Image: https://hub.docker.com/_/debian
+- Rootfs build source: https://github.com/debuerreotype/docker-debian-artifacts
+- Debian copyright information: https://www.debian.org/legal/licenses/
+- Bundled ARM64 layer digest: `sha256:1b7200988f192e72703c70486d494e2457935ac9b0f031ac09eb115b01a12d45`
 
 ## OpenMinis
 
