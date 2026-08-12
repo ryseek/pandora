@@ -10,30 +10,20 @@ native Jetpack Compose app.
 
 ![Pandora home, Codex chat, and Debian terminal](artifacts/pandora-screenshots.png)
 
-This milestone includes:
+## Todo / milestones
 
-- a native Jetpack Compose workspace combining durable Codex chats and Linux terminals;
-- a streaming chat interface backed by the native Codex app-server agent harness;
-- a real ARM64 Debian Linux userspace running through PRoot without root;
-- a persistent app-private root filesystem;
-- a real PTY terminal with ANSI color, cursor, scrollback, selection, and interactive programs;
-- a keyboard-safe viewport and pinned Esc/Tab/Ctrl/Alt/navigation key row;
-- a persistent terminal font-size setting with preview;
-- a foreground Linux-session service that keeps the PTY and network alive while Pandora is briefly backgrounded;
-- multiple retained terminal sessions with preserved scrollback, explicit Stop controls, and navigation that leaves processes running;
-- pinned, checksum-verified zmx 0.7.0 for named terminal attach/detach, restored terminal state, and detached-session discovery;
-- reproducible default packages after install and Repair (`ca-certificates`, `curl`, `util-linux`, `nodejs`, `npm`, `git`, `ripgrep`, `adb`);
-- a persistent Codex CLI installation under `/root/.local`, preserved across Repair;
-- device-aware Codex instructions in persistent `/root/.codex/AGENTS.md`, installed without overwriting user edits;
-- a PRoot-compatible Codex full-access default, avoiding unsupported Bubblewrap/user-namespace sandboxing;
-- live Codex allowance on Home through the official app-server rate-limit API, with tap-to-refresh and offline/sign-in states;
-- durable native Codex chat threads using `thread/list`, `thread/start`, `thread/resume`, and `turn/start`, with streamed agent messages, model selection, and full local workspace tools;
-- private on-device dictation and response reading through Sherpa-ONNX, with lazy-loaded engines and downloadable compact/balanced model choices;
-- directory-based projects that group chats by Codex working directory, with existing-folder, new-folder, and Git-clone creation flows;
-- a Settings helper that opens Codex browser login and keeps the OAuth exchange active in the background;
-- versioned workspace backup and staged restore from Settings, including projects, configuration, credentials, executable bits, and symlinks;
-- package installation and network access from the container.
-- a loopback-only agent bridge for visible phone-control sessions and user-requested completion notifications.
+- [x] Linux Debian containers
+- [x] Codex chats and persistent project storage
+- [x] Agent skill for controlling the device
+- [x] Easy onboarding
+- [x] Dictation
+- [x] Pandora can build itself
+- [ ] Settings UX redesign
+- [ ] BYOK, custom endpoints, and easy model setup and configuration for Codex
+- [ ] Tablet UX
+- [ ] Interactive voice mode
+- [ ] Lower-latency voice-over
+- [ ] Action-button and Bluetooth-remote dictation that works in the background for on-the-go, hands-free use
 
 ## Build
 
