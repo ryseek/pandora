@@ -65,7 +65,7 @@ class CodexThreadCatalog(context: Context) {
                                 JSONObject()
                                     .put("name", "pandora_android")
                                     .put("title", "Pandora Android")
-                                    .put("version", "0.1.0"),
+                                    .put("version", "0.1.1"),
                             ),
                         )
                         .toString(),
@@ -164,7 +164,7 @@ class CodexThreadCatalog(context: Context) {
                                 JSONObject()
                                     .put("name", "pandora_android")
                                     .put("title", "Pandora Android")
-                                    .put("version", "0.1.0"),
+                                    .put("version", "0.1.1"),
                             ),
                         )
                         .toString(),

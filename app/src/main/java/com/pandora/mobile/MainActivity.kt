@@ -69,6 +69,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MicNone
 import androidx.compose.material.icons.rounded.Image
@@ -123,6 +124,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpOffset
@@ -214,9 +217,24 @@ private fun PandoraApp() {
                 when (target) {
                     Screen.Onboarding -> OnboardingScreen(
                         onSignIn = {
+                            ModelProviderSettings.useCodex(context)
+                            RootfsInstaller(context).refreshModelProviderConfig()
                             AppSettings.setOnboardingCompleted(context, true)
-                            selectedSessionId = sessionManager.create("codex login").id
-                            screen = Screen.Container
+                            if (java.io.File(context.filesDir, "linux-workspace/.codex/auth.json").exists()) {
+                                screen = Screen.Home
+                            } else {
+                                selectedSessionId = sessionManager.create("codex login").id
+                                screen = Screen.Container
+                            }
+                        },
+                        onUseCustomProvider = { provider, apiKey ->
+                            runCatching {
+                                if (apiKey.isNotBlank()) ModelProviderSecretStore.saveApiKey(context, apiKey)
+                                ModelProviderSettings.useCustomProvider(context, provider)
+                                RootfsInstaller(context).refreshModelProviderConfig()
+                                AppSettings.setOnboardingCompleted(context, true)
+                                screen = Screen.Home
+                            }.exceptionOrNull()?.message
                         },
                         onExplore = {
                             AppSettings.setOnboardingCompleted(context, true)
@@ -323,6 +341,21 @@ private fun PandoraApp() {
                             selectedSessionId = sessionManager.create("codex login").id
                             screen = Screen.Container
                         },
+                        onModelProviderChanged = { mode ->
+                            chatManager.stopAll()
+                            when (mode) {
+                                ModelProviderMode.CODEX -> ModelProviderSettings.useCodex(context)
+                                ModelProviderMode.CUSTOM -> {
+                                    ModelProviderSettings.savedCustomProvider(context)?.let { provider ->
+                                        ModelProviderSettings.useCustomProvider(context, provider)
+                                    }
+                                }
+                            }
+                            RootfsInstaller(context).refreshModelProviderConfig()
+                        },
+                        onChangeModelProvider = {
+                            screen = Screen.Onboarding
+                        },
                         onStopAllForRepair = {
                             chatManager.stopAll()
                             sessionManager.stopAll()
@@ -350,6 +383,7 @@ private fun PandoraApp() {
 @Composable
 private fun OnboardingScreen(
     onSignIn: () -> Unit,
+    onUseCustomProvider: (CustomModelProvider, String) -> String?,
     onExplore: () -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
@@ -393,7 +427,11 @@ private fun OnboardingScreen(
             onStart = ::startSetup,
         )
         is OnboardingState.Installing -> OnboardingSetupProgress(current.detail)
-        OnboardingState.Ready -> OnboardingReady(onSignIn = onSignIn, onExplore = onExplore)
+        OnboardingState.Ready -> OnboardingReady(
+            onSignIn = onSignIn,
+            onUseCustomProvider = onUseCustomProvider,
+            onExplore = onExplore,
+        )
         is OnboardingState.Failed -> OnboardingFailure(current.detail, onRetry = ::startSetup)
     }
 }
@@ -615,7 +653,25 @@ private fun OnboardingSetupProgress(detail: String) {
 }
 
 @Composable
-private fun OnboardingReady(onSignIn: () -> Unit, onExplore: () -> Unit) {
+private fun OnboardingReady(
+    onSignIn: () -> Unit,
+    onUseCustomProvider: (CustomModelProvider, String) -> String?,
+    onExplore: () -> Unit,
+) {
+    val context = LocalContext.current.applicationContext
+    val savedCustomProvider = remember(context) { ModelProviderSettings.savedCustomProvider(context) }
+    val hasSavedApiKey = remember(context) { ModelProviderSecretStore.hasApiKey(context) }
+    var configuringCustomProvider by remember { mutableStateOf(false) }
+    if (configuringCustomProvider) {
+        CustomProviderOnboarding(
+            existingProvider = savedCustomProvider,
+            hasSavedApiKey = hasSavedApiKey,
+            onBack = { configuringCustomProvider = false },
+            onContinue = onUseCustomProvider,
+        )
+        return
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -649,30 +705,224 @@ private fun OnboardingReady(onSignIn: () -> Unit, onExplore: () -> Unit) {
             )
             Spacer(Modifier.height(12.dp))
             Text(
-                "Connect your ChatGPT account so Codex can start working with your projects.",
+                "Choose what powers your coding agent. You can use Codex with ChatGPT or bring an OpenAI-compatible model.",
                 color = Muted,
                 fontSize = 16.sp,
                 lineHeight = 23.sp,
             )
-            Spacer(Modifier.height(26.dp))
+            Spacer(Modifier.height(28.dp))
+            OnboardingProviderChoice(
+                title = "Use Codex",
+                detail = "Sign in with ChatGPT and use your Codex plan.",
+                icon = Icons.Rounded.AutoAwesome,
+                primary = true,
+                onClick = onSignIn,
+            )
+            Spacer(Modifier.height(12.dp))
+            OnboardingProviderChoice(
+                title = "Use Codex OSS",
+                detail = "Connect your own OpenAI-compatible endpoint and models.",
+                icon = Icons.Rounded.Key,
+                primary = false,
+                onClick = { configuringCustomProvider = true },
+            )
+            Spacer(Modifier.height(18.dp))
             Row(verticalAlignment = Alignment.Top) {
-                Icon(Icons.Rounded.Lock, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(10.dp))
+                Icon(Icons.Rounded.Lock, contentDescription = null, tint = Accent, modifier = Modifier.size(17.dp))
+                Spacer(Modifier.width(9.dp))
                 Text(
-                    "Sign-in opens in your browser. Your password is never entered in Pandora.",
+                    "ChatGPT sign-in happens in your browser. Bring-your-own keys are encrypted on this device.",
                     color = Muted,
-                    fontSize = 13.sp,
-                    lineHeight = 19.sp,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
                 )
             }
         }
-        OnboardingPrimaryAction(label = "Sign in with ChatGPT", onClick = onSignIn)
         TextButton(
             onClick = onExplore,
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         ) {
             Text("Explore Pandora first", color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
+    }
+}
+
+@Composable
+private fun OnboardingProviderChoice(
+    title: String,
+    detail: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    primary: Boolean,
+    onClick: () -> Unit,
+) {
+    val background = if (primary) Ink else Paper
+    val foreground = if (primary) Paper else Ink
+    val supporting = if (primary) Paper.copy(alpha = 0.74f) else Muted
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 74.dp)
+            .then(if (primary) Modifier.background(background, RoundedCornerShape(16.dp)) else Modifier.border(1.dp, Line, RoundedCornerShape(16.dp)))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 17.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(38.dp).background(
+                if (primary) foreground.copy(alpha = 0.13f) else AccentSurface,
+                RoundedCornerShape(12.dp),
+            ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = if (primary) foreground else Accent, modifier = Modifier.size(19.dp))
+        }
+        Spacer(Modifier.width(13.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = foreground, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(3.dp))
+            Text(detail, color = supporting, fontSize = 12.sp, lineHeight = 17.sp)
+        }
+        Spacer(Modifier.width(10.dp))
+        Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null, tint = foreground, modifier = Modifier.size(19.dp))
+    }
+}
+
+@Composable
+private fun CustomProviderOnboarding(
+    existingProvider: CustomModelProvider?,
+    hasSavedApiKey: Boolean,
+    onBack: () -> Unit,
+    onContinue: (CustomModelProvider, String) -> String?,
+) {
+    var baseUrl by remember(existingProvider) { mutableStateOf(existingProvider?.baseUrl.orEmpty()) }
+    var apiKey by remember { mutableStateOf("") }
+    var modelIds by remember(existingProvider) {
+        mutableStateOf(existingProvider?.modelIds?.joinToString("\n").orEmpty())
+    }
+    var submitted by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    val parsedModels = ModelProviderSettings.parseModelIds(modelIds)
+    val urlValid = ModelProviderSettings.isSupportedUrl(baseUrl.trim())
+    val apiKeyValid = apiKey.isNotBlank() || hasSavedApiKey
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, modifier = Modifier.size(42.dp)) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Ink)
+            }
+            Spacer(Modifier.width(4.dp))
+            OnboardingBrand()
+        }
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Spacer(Modifier.height(26.dp))
+            Text(
+                "Bring your own model",
+                color = Ink,
+                fontSize = 30.sp,
+                lineHeight = 35.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Codex OSS will use your provider for every agent request. The endpoint must support the OpenAI Responses API.",
+                color = Muted,
+                fontSize = 15.sp,
+                lineHeight = 22.sp,
+            )
+            Spacer(Modifier.height(24.dp))
+            OutlinedTextField(
+                value = baseUrl,
+                onValueChange = { baseUrl = it; saveError = null },
+                label = { Text("OpenAI-compatible URL") },
+                placeholder = { Text("https://provider.example.com/v1") },
+                singleLine = true,
+                isError = submitted && !urlValid,
+                supportingText = if (submitted && !urlValid) {
+                    { Text("Enter a complete HTTP or HTTPS URL.") }
+                } else null,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = { apiKey = it; saveError = null },
+                label = { Text("API key") },
+                placeholder = { Text(if (hasSavedApiKey) "Saved key" else "sk-…") },
+                singleLine = true,
+                isError = submitted && !apiKeyValid,
+                supportingText = if (submitted && !apiKeyValid) {
+                    { Text("Enter the key issued by your provider.") }
+                } else if (hasSavedApiKey && apiKey.isBlank()) {
+                    { Text("Leave blank to keep the saved key.") }
+                } else null,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = modelIds,
+                onValueChange = { modelIds = it; saveError = null },
+                label = { Text("Model identifiers") },
+                placeholder = { Text("openai/gpt-oss-120b\nopenai/gpt-oss-20b") },
+                minLines = 2,
+                maxLines = 4,
+                isError = submitted && parsedModels.isEmpty(),
+                supportingText = {
+                    Text(
+                        if (submitted && parsedModels.isEmpty()) "Add at least one model identifier."
+                        else "One per line or separated by commas. The first is the default.",
+                    )
+                },
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(14.dp))
+            Row(
+                Modifier.fillMaxWidth().background(SoftSurface, RoundedCornerShape(14.dp)).padding(14.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Icon(Icons.Rounded.Lock, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Your key is encrypted with Android Keystore and passed to Codex only as an environment variable.",
+                    color = Ink,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+            }
+            saveError?.let { error ->
+                Spacer(Modifier.height(12.dp))
+                Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp, lineHeight = 18.sp)
+            }
+            Spacer(Modifier.height(22.dp))
+        }
+        OnboardingPrimaryAction(
+            label = "Use these models",
+            onClick = {
+                submitted = true
+                if (!urlValid || !apiKeyValid || parsedModels.isEmpty()) return@OnboardingPrimaryAction
+                saveError = onContinue(
+                    CustomModelProvider(baseUrl.trim().trimEnd('/'), parsedModels),
+                    apiKey,
+                )
+            },
+        )
     }
 }
 
@@ -819,6 +1069,7 @@ private fun HomeScreen(
     onCodexLogin: () -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
+    val customProvider = remember(context) { ModelProviderSettings.customProvider(context) }
     val chatCatalog = remember(context) { CodexThreadCatalog(context) }
     val projectCatalog = remember(context) { ProjectCatalog(context) }
     val archiveCatalog = remember(context) { ArchiveCatalog(context) }
@@ -846,7 +1097,10 @@ private fun HomeScreen(
         catalogLoading = chats.isEmpty()
         val loaded = withContext(Dispatchers.IO) {
             coroutineScope {
-                val usage = async { CodexUsageReader(context).read() }
+                val usage = async {
+                    if (customProvider == null) CodexUsageReader(context).read()
+                    else CodexLimitsState.Unavailable
+                }
                 val chatThreads = async { runCatching { chatCatalog.read() }.getOrNull() }
                 val terminals = async { runCatching { ZmxSessionCatalog(context).read() }.getOrNull() }
                 Triple(usage.await(), chatThreads.await(), terminals.await())
@@ -1047,11 +1301,28 @@ private fun HomeScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.weight(1f)) {
-                CodexLimitsFooter(
-                    state = limitState,
-                    onRefresh = { limitRefresh++ },
-                    onSignIn = onCodexLogin,
-                )
+                if (customProvider == null) {
+                    CodexLimitsFooter(
+                        state = limitState,
+                        onRefresh = { limitRefresh++ },
+                        onSignIn = onCodexLogin,
+                    )
+                } else {
+                    Row(
+                        Modifier.heightIn(min = 48.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(7.dp).background(Color(0xFF55A76A), CircleShape))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Codex OSS · ${customProvider.defaultModel}",
+                            color = Muted,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
             Spacer(Modifier.width(12.dp))
             Row(

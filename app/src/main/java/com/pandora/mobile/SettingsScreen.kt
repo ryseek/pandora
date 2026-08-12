@@ -29,12 +29,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DeveloperMode
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SettingsBrightness
@@ -95,6 +97,8 @@ fun SettingsScreen(
     onArchive: () -> Unit,
     onPlugins: () -> Unit,
     onCodexLogin: () -> Unit,
+    onModelProviderChanged: (ModelProviderMode) -> Unit,
+    onChangeModelProvider: () -> Unit,
     onStopAllForRepair: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -119,6 +123,9 @@ fun SettingsScreen(
     val backup = remember { WorkspaceBackup(context.filesDir, context.cacheDir) }
     val codexInstalled = remember { File(context.filesDir, "linux-workspace/.local/bin/codex").exists() }
     val codexSignedIn = remember { File(context.filesDir, "linux-workspace/.codex/auth.json").exists() }
+    val savedCustomProvider = remember(context) { ModelProviderSettings.savedCustomProvider(context) }
+    val customProviderConfigured = savedCustomProvider != null && ModelProviderSecretStore.hasApiKey(context)
+    var modelProviderMode by remember { mutableStateOf(ModelProviderSettings.mode(context)) }
 
     val createBackup = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip"),
@@ -530,9 +537,62 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(28.dp))
             Text("CODEX", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(10.dp))
+            Text("Model provider", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Switch providers without signing in or entering your key again.",
+                color = SettingsMuted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
             Spacer(Modifier.height(14.dp))
+            Row(
+                Modifier.fillMaxWidth().background(SettingsSoftSurface, RoundedCornerShape(14.dp)).padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ThemeChoice(
+                    label = "Codex",
+                    selected = modelProviderMode == ModelProviderMode.CODEX,
+                    icon = { tint -> Icon(Icons.Rounded.AutoAwesome, null, tint = tint, modifier = Modifier.size(17.dp)) },
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        if (modelProviderMode != ModelProviderMode.CODEX) {
+                            onModelProviderChanged(ModelProviderMode.CODEX)
+                            modelProviderMode = ModelProviderMode.CODEX
+                        }
+                    },
+                )
+                ThemeChoice(
+                    label = "Codex OSS",
+                    selected = modelProviderMode == ModelProviderMode.CUSTOM,
+                    icon = { tint -> Icon(Icons.Rounded.Key, null, tint = tint, modifier = Modifier.size(17.dp)) },
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        if (customProviderConfigured) {
+                            if (modelProviderMode != ModelProviderMode.CUSTOM) {
+                                onModelProviderChanged(ModelProviderMode.CUSTOM)
+                                modelProviderMode = ModelProviderMode.CUSTOM
+                            }
+                        } else {
+                            onChangeModelProvider()
+                        }
+                    },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                when (modelProviderMode) {
+                    ModelProviderMode.CODEX -> "New chats use your saved ChatGPT session. Both profiles stay saved."
+                    ModelProviderMode.CUSTOM -> "New chats use ${savedCustomProvider?.defaultModel}. Your ChatGPT session stays saved."
+                },
+                color = SettingsMuted,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+            )
+            Spacer(Modifier.height(12.dp))
             SettingsAction(
-                title = "Codex login",
+                title = "ChatGPT account",
                 subtitle = when {
                     !codexInstalled -> "Codex is still installing"
                     codexSignedIn -> "Signed in · authenticate again"
@@ -548,6 +608,22 @@ fun SettingsScreen(
                 enabled = codexInstalled,
                 iconBackground = Color(0xFF20211F),
                 onClick = onCodexLogin,
+            )
+            Box(
+                Modifier.fillMaxWidth().padding(start = 55.dp).height(1.dp).background(SettingsLine),
+            )
+            SettingsAction(
+                title = "Codex OSS profile",
+                subtitle = if (customProviderConfigured) {
+                    "${savedCustomProvider?.defaultModel} · edit endpoint, key, and models"
+                } else {
+                    "Set up an OpenAI-compatible provider"
+                },
+                icon = { tint ->
+                    Icon(Icons.Rounded.Key, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+                },
+                enabled = codexInstalled,
+                onClick = onChangeModelProvider,
             )
 
             Spacer(Modifier.height(28.dp))

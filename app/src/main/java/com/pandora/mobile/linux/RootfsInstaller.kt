@@ -3,6 +3,8 @@ package com.pandora.mobile.linux
 import android.content.Context
 import android.system.Os
 import android.util.Log
+import com.pandora.mobile.ModelProviderSecretStore
+import com.pandora.mobile.ModelProviderSettings
 import java.io.File
 import java.io.InputStream
 import java.net.URL
@@ -239,8 +241,98 @@ class RootfsInstaller(private val context: Context) {
             value = "\"danger-full-access\"",
             replaceExisting = true,
         )
+        current = applyModelProviderSettings(current)
         config.parentFile?.mkdirs()
         if (!config.exists() || config.readText() != current) config.writeText(current)
+    }
+
+    /** Refreshes the app-owned provider block immediately after onboarding changes. */
+    fun refreshModelProviderConfig() {
+        ensureCodexDefaults()
+    }
+
+    private fun applyModelProviderSettings(content: String): String {
+        val provider = ModelProviderSettings.customProvider(context)
+        val wasPandoraProvider = topLevelTomlValue(content, "model_provider") == "\"$PANDORA_PROVIDER_ID\""
+        var updated = removeTomlTable(content, PANDORA_PROVIDER_TABLE)
+        if (provider == null) {
+            if (wasPandoraProvider) {
+                updated = removeTopLevelTomlSetting(updated, "model_provider")
+                updated = removeTopLevelTomlSetting(updated, "model")
+            }
+            return updated
+        }
+
+        updated = setTopLevelTomlSetting(
+            removeTopLevelTomlSetting(updated, "model_provider"),
+            "model_provider",
+            "\"$PANDORA_PROVIDER_ID\"",
+            replaceExisting = true,
+        )
+        updated = setTopLevelTomlSetting(
+            removeTopLevelTomlSetting(updated, "model"),
+            "model",
+            tomlString(provider.defaultModel),
+            replaceExisting = true,
+        )
+        return updated.trimEnd() + "\n\n" + buildString {
+            appendLine(PANDORA_PROVIDER_TABLE)
+            appendLine("name = \"Bring your own model\"")
+            appendLine("base_url = ${tomlString(provider.baseUrl)}")
+            appendLine("env_key = \"$PANDORA_API_KEY_ENV\"")
+            appendLine("wire_api = \"responses\"")
+        }
+    }
+
+    private fun topLevelTomlValue(content: String, key: String): String? {
+        val firstTable = content.lines().indexOfFirst { it.trimStart().startsWith('[') }.let {
+            if (it == -1) content.lines().size else it
+        }
+        val pattern = Regex("^${Regex.escape(key)}\\s*=\\s*(.+)$")
+        return content.lines().take(firstTable).firstNotNullOfOrNull { line ->
+            pattern.find(line.trimStart())?.groupValues?.get(1)?.trim()
+        }
+    }
+
+    private fun removeTopLevelTomlSetting(content: String, key: String): String {
+        val lines = content.lines()
+        val firstTable = lines.indexOfFirst { it.trimStart().startsWith('[') }.let {
+            if (it == -1) lines.size else it
+        }
+        val pattern = Regex("^${Regex.escape(key)}\\s*=")
+        return lines.filterIndexed { index, line ->
+            index >= firstTable || !pattern.containsMatchIn(line.trimStart())
+        }.joinToString("\n").trimEnd() + "\n"
+    }
+
+    private fun removeTomlTable(content: String, table: String): String {
+        val output = mutableListOf<String>()
+        var skipping = false
+        for (line in content.lines()) {
+            val trimmed = line.trim()
+            if (trimmed == table) {
+                skipping = true
+                continue
+            }
+            if (skipping && trimmed.startsWith('[')) skipping = false
+            if (!skipping) output += line
+        }
+        return output.joinToString("\n").trimEnd() + "\n"
+    }
+
+    private fun tomlString(value: String): String = buildString {
+        append('"')
+        value.forEach { character ->
+            when (character) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> append(character)
+            }
+        }
+        append('"')
     }
 
     private fun setTopLevelTomlSetting(
@@ -294,6 +386,9 @@ class RootfsInstaller(private val context: Context) {
                 put("TERM", "dumb")
                 put("DEBIAN_FRONTEND", "noninteractive")
                 put("LANG", "C.UTF-8")
+                if (ModelProviderSettings.customProvider(context) != null) {
+                    ModelProviderSecretStore.apiKey(context)?.let { put(PANDORA_API_KEY_ENV, it) }
+                }
                 // An adb server running inside an emulator otherwise discovers that
                 // same emulator on localhost:5555 and opens the misleading legacy
                 // "Allow USB debugging?" dialog. Pandora uses explicit TLS pairing.
@@ -481,6 +576,9 @@ class RootfsInstaller(private val context: Context) {
     private companion object {
         const val TAG = "RootfsInstaller"
         const val PROCESS_IDENTITY_ENV = "PANDORA_PROCESS_ID"
+        const val PANDORA_PROVIDER_ID = "pandora_byom"
+        const val PANDORA_API_KEY_ENV = "PANDORA_MODEL_API_KEY"
+        const val PANDORA_PROVIDER_TABLE = "[model_providers.$PANDORA_PROVIDER_ID]"
         val INSTALL_LOCK = Any()
         val PROCESS_IDENTITIES = WeakHashMap<Process, String>()
         val DEFAULT_PACKAGES = listOf(

@@ -19,7 +19,7 @@ native Jetpack Compose app.
 - [x] Dictation
 - [x] Pandora can build itself
 - [ ] Settings UX redesign
-- [ ] BYOK, custom endpoints, and easy model setup and configuration for Codex
+- [x] BYOK, custom OpenAI-compatible endpoints, and model setup for Codex OSS
 - [ ] Tablet UX
 - [ ] Interactive voice mode
 - [ ] Lower-latency voice-over
@@ -70,6 +70,8 @@ The APK contains a Debian 13 (Trixie) ARM64 slim rootfs and a PRoot executable. 
 This is a userspace Linux environment sharing Android's kernel, not a VM and not a security boundary. The shell is attached to a native PTY, so terminal sizing, signals, arrow keys, and interactive full-screen TTY programs behave normally.
 
 Codex runs with `sandbox_mode = "danger-full-access"` because Android's PRoot environment cannot provide the user namespaces and `/proc/sys` access required by Bubblewrap. Codex commands can therefore read and modify the complete Pandora Linux workspace without an additional sandbox boundary.
+
+During onboarding, users can sign in to hosted Codex or choose Codex OSS and provide an OpenAI-compatible Responses API URL, API key, and one or more model identifiers. Pandora stores the key encrypted with Android Keystore, writes only the non-secret provider definition to Codex's user config, and supplies the key to Codex through its process environment.
 
 Pandora also installs global Codex guidance at `/root/.codex/AGENTS.md` from the APK on first setup. These instructions give every chat and project basic context about Android, Debian, PRoot, persistent storage, Repair behavior, and runtime limitations. An existing file is left untouched so users can customize or replace the guidance, while project-level `AGENTS.md` files can add more specific instructions.
 

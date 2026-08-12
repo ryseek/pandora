@@ -6,6 +6,18 @@ All notable changes to Pandora are documented here. The format follows
 
 ## Unreleased
 
+## 0.1.1 - 2026-08-12
+
+### Added
+
+- Codex OSS onboarding with bring-your-own OpenAI-compatible endpoint, API key, and model identifiers.
+- Multiple custom model identifiers with selection from the native chat model picker.
+- A quick Settings switch between saved hosted Codex and Codex OSS profiles without signing in or entering credentials again.
+
+### Security
+
+- Custom provider keys are encrypted with Android Keystore and passed to Codex only through its process environment; keys are never written to Codex configuration.
+
 ## 0.1.0 - 2026-08-11
 
 ### Added

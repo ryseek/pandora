@@ -1,6 +1,7 @@
 package com.pandora.mobile.linux
 
 import android.content.Context
+import com.pandora.mobile.ModelProviderSettings
 import java.io.BufferedWriter
 import java.io.File
 import java.net.URLDecoder
@@ -67,6 +68,7 @@ class CodexChatSession(
     private val cwd: String = "/root",
 ) {
     private val appContext = context.applicationContext
+    private val customProvider = ModelProviderSettings.customProvider(appContext)
     private val installer = RootfsInstaller(appContext)
     private val attachmentIndex = ChatAttachmentIndex(installer.workspace)
     private val registry = PandoraChatRegistry(appContext)
@@ -84,7 +86,17 @@ class CodexChatSession(
     private val _state = MutableStateFlow<CodexChatState>(CodexChatState.Starting("Preparing Codex…"))
     val state: StateFlow<CodexChatState> = _state.asStateFlow()
 
-    private val _models = MutableStateFlow<List<CodexModel>>(emptyList())
+    private val _models = MutableStateFlow(
+        customProvider?.modelIds?.mapIndexed { index, modelId ->
+            CodexModel(
+                id = modelId,
+                model = modelId,
+                displayName = modelId,
+                description = "Configured OpenAI-compatible model",
+                isDefault = index == 0,
+            )
+        }.orEmpty(),
+    )
     val models: StateFlow<List<CodexModel>> = _models.asStateFlow()
 
     private val _selectedModel = MutableStateFlow<String?>(null)
@@ -93,7 +105,7 @@ class CodexChatSession(
     @Volatile private var process: Process? = null
     @Volatile private var writer: BufferedWriter? = null
     @Volatile private var threadId: String? = null
-    @Volatile private var model: String = "Codex"
+    @Volatile private var model: String = customProvider?.defaultModel ?: "Codex"
 
     /** The requested or resolved thread identity, used to avoid opening a second writer. */
     val activeThreadId: String?
@@ -197,7 +209,7 @@ class CodexChatSession(
             val clientInfo = JSONObject()
                 .put("name", "pandora_android")
                 .put("title", "Pandora Android")
-                .put("version", "0.1.0")
+                .put("version", "0.1.1")
             sendRequest(1, "initialize", JSONObject().put("clientInfo", clientInfo))
         } catch (error: Throwable) {
             if (!closed.get()) fail(error.message ?: "Could not start Codex")
@@ -235,6 +247,7 @@ class CodexChatSession(
                     .put("sandbox", "danger-full-access")
                     .put("approvalPolicy", "never")
                     .put("developerInstructions", AGENT_ATTACHMENT_INSTRUCTIONS)
+                customProvider?.defaultModel?.let { params.put("model", it) }
                 if (resumeThreadId == null) {
                     params.put("threadSource", "pandora_android")
                     sendRequest(2, "thread/start", params)
@@ -242,14 +255,17 @@ class CodexChatSession(
                     params.put("threadId", resumeThreadId)
                     sendRequest(2, "thread/resume", params)
                 }
-                sendRequest(3, "model/list", JSONObject().put("limit", 100))
+                if (customProvider == null) {
+                    sendRequest(3, "model/list", JSONObject().put("limit", 100))
+                }
             }
             2 -> {
                 val result = message.optJSONObject("result") ?: return fail("Codex returned no thread")
                 threadId = result.optJSONObject("thread")?.optString("id").orEmpty().ifBlank { null }
                 if (threadId == null) return fail("Codex returned an invalid thread")
                 if (resumeThreadId == null) registry.add(threadId!!)
-                model = result.optString("model", "Codex").ifBlank { "Codex" }
+                model = customProvider?.defaultModel
+                    ?: result.optString("model", "Codex").ifBlank { "Codex" }
                 _selectedModel.value = model
                 loadHistory(result.optJSONObject("thread"))
                 _state.value = CodexChatState.Ready(model)
