@@ -142,25 +142,25 @@ fun PluginsScreen(
             PluginCapability("Tap, type, swipe, and open apps")
             Spacer(Modifier.height(10.dp))
             PluginCapability("Visible frame while control is active")
-        }
-
-        if (state.enabled) {
-            Spacer(Modifier.height(20.dp))
-            StatusRow(state)
-            Spacer(Modifier.height(20.dp))
-            PrimaryPluginButton(
-                label = when (state.stage) {
-                    AdbPluginStage.CONNECTED -> "Review connection"
-                    AdbPluginStage.ERROR -> "Try setup again"
-                    else -> "Set up connection"
-                },
-                onClick = onOpenSetup,
-            )
-        } else {
-            Spacer(Modifier.height(24.dp))
-            PrimaryPluginButton(label = "Enable and set up") {
-                onEnabledChange(true)
-                onOpenSetup()
+            Spacer(Modifier.height(18.dp))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialThemeColors.line))
+            Spacer(Modifier.height(16.dp))
+            if (state.enabled) {
+                StatusRow(state)
+                Spacer(Modifier.height(14.dp))
+                PrimaryPluginButton(
+                    label = when (state.stage) {
+                        AdbPluginStage.CONNECTED -> "Review connection"
+                        AdbPluginStage.ERROR -> "Try setup again"
+                        else -> "Set up connection"
+                    },
+                    onClick = onOpenSetup,
+                )
+            } else {
+                PrimaryPluginButton(label = "Enable and set up") {
+                    onEnabledChange(true)
+                    onOpenSetup()
+                }
             }
         }
 

@@ -7,6 +7,11 @@ import org.junit.Test
 
 class CodexChatAttachmentTest {
     @Test
+    fun identifiesAndroidPackagesForDirectInstallation() {
+        assertEquals("application/vnd.android.package-archive", guessAttachmentMimeType("pandora.apk"))
+    }
+
+    @Test
     fun extractsVerifiedAgentFileLinksAsAttachments() {
         val workspace = Files.createTempDirectory("pandora-agent-attachment").toFile()
         try {

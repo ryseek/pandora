@@ -6,6 +6,20 @@ All notable changes to Pandora are documented here. The format follows
 
 ## Unreleased
 
+## 0.1.2 - 2026-08-14
+
+### Added
+
+- Multiline chat composition: the keyboard Enter key now inserts a newline while the composer button sends the message.
+- A Stop action in the composer while Codex is generating, backed by the app-server turn interruption protocol.
+- Direct installation for APK files shared by the agent, including dedicated Install actions in attachment rows and previews.
+
+### Changed
+
+- Grouped ADB phone-control setup, connection status, and actions inside the plugin card.
+- Moved dictation, speech-model, and reading-voice controls to a dedicated Voice settings screen.
+- Open saved Codex OSS provider editing from Settings without returning to onboarding.
+
 ## 0.1.1 - 2026-08-12
 
 ### Added

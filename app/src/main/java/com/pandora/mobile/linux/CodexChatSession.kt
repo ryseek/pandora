@@ -1,6 +1,7 @@
 package com.pandora.mobile.linux
 
 import android.content.Context
+import com.pandora.mobile.BuildConfig
 import com.pandora.mobile.ModelProviderSettings
 import java.io.BufferedWriter
 import java.io.File
@@ -79,12 +80,18 @@ class CodexChatSession(
     private val turnRequestIds = mutableSetOf<Int>()
     private val turnRequestOrdinals = mutableMapOf<Int, Int>()
     private val assistantMessageIds = mutableMapOf<String, String>()
+    @Volatile private var activeTurnId: String? = null
+    @Volatile private var interruptRequested = false
+    @Volatile private var interruptRequestId: Int? = null
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
     private val _state = MutableStateFlow<CodexChatState>(CodexChatState.Starting("Preparing Codex…"))
     val state: StateFlow<CodexChatState> = _state.asStateFlow()
+
+    private val _interrupting = MutableStateFlow(false)
+    val interrupting: StateFlow<Boolean> = _interrupting.asStateFlow()
 
     private val _models = MutableStateFlow(
         customProvider?.modelIds?.mapIndexed { index, modelId ->
@@ -126,6 +133,9 @@ class CodexChatSession(
             text = prompt,
             attachments = attachments,
         )
+        activeTurnId = null
+        interruptRequested = false
+        _interrupting.value = false
         _state.value = CodexChatState.Running(model)
         val requestId = nextRequestId.getAndIncrement()
         synchronized(turnRequestIds) {
@@ -150,6 +160,18 @@ class CodexChatSession(
         }
     }
 
+    fun interrupt(): Boolean {
+        val activeThread = threadId ?: return false
+        if (_state.value !is CodexChatState.Running || _interrupting.value) return false
+        _interrupting.value = true
+        val turn = activeTurnId
+        if (turn == null) {
+            interruptRequested = true
+            return true
+        }
+        return sendInterrupt(activeThread, turn)
+    }
+
     fun selectModel(model: String) {
         if (_models.value.none { it.model == model }) return
         _selectedModel.value = model
@@ -163,6 +185,10 @@ class CodexChatSession(
         process?.let(installer::terminateProcessTree)
         process = null
         writer = null
+        activeTurnId = null
+        interruptRequested = false
+        interruptRequestId = null
+        _interrupting.value = false
         _state.value = CodexChatState.Closed
         scope.cancel()
     }
@@ -209,7 +235,7 @@ class CodexChatSession(
             val clientInfo = JSONObject()
                 .put("name", "pandora_android")
                 .put("title", "Pandora Android")
-                .put("version", "0.1.1")
+                .put("version", BuildConfig.VERSION_NAME)
             sendRequest(1, "initialize", JSONObject().put("clientInfo", clientInfo))
         } catch (error: Throwable) {
             if (!closed.get()) fail(error.message ?: "Could not start Codex")
@@ -231,8 +257,16 @@ class CodexChatSession(
             val detail = error.optString("message", "Codex request failed")
             if (id == 1 || id == 2) {
                 fail(detail)
+            } else if (id == interruptRequestId) {
+                interruptRequestId = null
+                interruptRequested = false
+                _interrupting.value = false
+                addSystemMessage("Could not stop Codex: $detail")
             } else if (synchronized(turnRequestIds) { turnRequestIds.remove(id) }) {
                 synchronized(turnRequestIds) { turnRequestOrdinals.remove(id) }
+                activeTurnId = null
+                interruptRequested = false
+                _interrupting.value = false
                 addSystemMessage(detail)
                 if (!closed.get()) _state.value = CodexChatState.Ready(model)
             }
@@ -298,6 +332,7 @@ class CodexChatSession(
                     ?.optJSONObject("turn")
                     ?.optString("id")
                     .orEmpty()
+                if (responseTurnId.isNotBlank()) onTurnStarted(responseTurnId)
                 val activeThread = threadId
                 if (userOrdinal != null && activeThread != null && responseTurnId.isNotBlank()) {
                     runCatching { attachmentIndex.associateTurn(activeThread, userOrdinal, responseTurnId) }
@@ -390,6 +425,10 @@ class CodexChatSession(
     private fun handleNotification(method: String, params: JSONObject?) {
         if (params == null) return
         when (method) {
+            "turn/started" -> params.optJSONObject("turn")
+                ?.optString("id")
+                ?.takeIf(String::isNotBlank)
+                ?.let(::onTurnStarted)
             "item/agentMessage/delta" -> appendAgentDelta(
                 itemId = params.optString("itemId"),
                 delta = params.optString("delta"),
@@ -401,6 +440,10 @@ class CodexChatSession(
                 if (status == "failed" && error.isNotBlank()) {
                     addSystemMessage(error)
                 }
+                activeTurnId = null
+                interruptRequested = false
+                interruptRequestId = null
+                _interrupting.value = false
                 if (!closed.get()) _state.value = CodexChatState.Ready(model)
             }
             "error" -> {
@@ -408,6 +451,31 @@ class CodexChatSession(
                 addSystemMessage(detail)
             }
         }
+    }
+
+    private fun onTurnStarted(turnId: String) {
+        activeTurnId = turnId
+        if (interruptRequested) {
+            val activeThread = threadId ?: return
+            interruptRequested = false
+            sendInterrupt(activeThread, turnId)
+        }
+    }
+
+    private fun sendInterrupt(activeThread: String, turnId: String): Boolean {
+        val requestId = nextRequestId.getAndIncrement()
+        interruptRequestId = requestId
+        val sent = sendRequest(
+            requestId,
+            "turn/interrupt",
+            JSONObject().put("threadId", activeThread).put("turnId", turnId),
+        )
+        if (!sent) {
+            interruptRequestId = null
+            _interrupting.value = false
+            addSystemMessage("Could not send the stop request to Codex")
+        }
+        return sent
     }
 
     /** Do not leave the harness blocked if a future tool requests interaction unexpectedly. */
@@ -459,6 +527,10 @@ class CodexChatSession(
 
     private fun fail(detail: String) {
         addSystemMessage(detail)
+        activeTurnId = null
+        interruptRequested = false
+        interruptRequestId = null
+        _interrupting.value = false
         _state.value = CodexChatState.Failed(detail)
         runCatching { writer?.close() }
         process?.let(installer::terminateProcessTree)
@@ -574,15 +646,15 @@ internal fun agentDisplayText(text: String): String = standaloneAgentFileLink
     .replace(Regex("\\n{3,}"), "\n\n")
     .trim()
 
-private fun guessAttachmentMimeType(name: String): String = URLConnection.guessContentTypeFromName(name)
-    ?: when (name.substringAfterLast('.', "").lowercase()) {
+internal fun guessAttachmentMimeType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "apk" -> "application/vnd.android.package-archive"
         "md", "markdown" -> "text/markdown"
         "json" -> "application/json"
         "csv" -> "text/csv"
         "txt", "log" -> "text/plain"
         "pdf" -> "application/pdf"
         "zip" -> "application/zip"
-        else -> "application/octet-stream"
+        else -> URLConnection.guessContentTypeFromName(name) ?: "application/octet-stream"
     }
 
 private const val AGENT_ATTACHMENT_INSTRUCTIONS =

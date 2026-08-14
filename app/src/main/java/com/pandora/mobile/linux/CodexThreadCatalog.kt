@@ -1,5 +1,6 @@
 package com.pandora.mobile.linux
 
+import com.pandora.mobile.BuildConfig
 import android.content.Context
 import java.io.File
 import java.util.concurrent.Executors
@@ -65,7 +66,7 @@ class CodexThreadCatalog(context: Context) {
                                 JSONObject()
                                     .put("name", "pandora_android")
                                     .put("title", "Pandora Android")
-                                    .put("version", "0.1.1"),
+                                    .put("version", BuildConfig.VERSION_NAME),
                             ),
                         )
                         .toString(),
@@ -164,7 +165,7 @@ class CodexThreadCatalog(context: Context) {
                                 JSONObject()
                                     .put("name", "pandora_android")
                                     .put("title", "Pandora Android")
-                                    .put("version", "0.1.1"),
+                                    .put("version", BuildConfig.VERSION_NAME),
                             ),
                         )
                         .toString(),

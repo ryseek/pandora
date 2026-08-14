@@ -27,4 +27,16 @@ class ChatAttachmentStoreTest {
         assertTrue(attachment("README.md").isTextPreviewable())
         assertFalse(attachment("archive.zip", "application/zip").isTextPreviewable())
     }
+
+    @Test
+    fun recognizesApksAndUsesThePackageInstallerMimeType() {
+        val attachment = ChatAttachment(
+            kind = ChatAttachmentKind.FILE,
+            name = "pandora-debug.APK",
+            containerPath = "/root/pandora-debug.APK",
+        )
+
+        assertTrue(attachment.isAndroidPackage())
+        assertEquals(ANDROID_PACKAGE_MIME_TYPE, attachment.androidOpenMimeType())
+    }
 }

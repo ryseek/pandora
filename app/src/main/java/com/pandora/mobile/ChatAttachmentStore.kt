@@ -118,7 +118,7 @@ internal object ChatAttachmentStore {
         val file = resolve(context, attachment) ?: return false
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, attachment.mimeType.ifBlank { "application/octet-stream" })
+            setDataAndType(uri, attachment.androidOpenMimeType())
             clipData = ClipData.newRawUri(attachment.name, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -144,6 +144,17 @@ internal object ChatAttachmentStore {
             .take(96)
         return sanitized.takeUnless { it.isBlank() || it.all { char -> char == '_' } } ?: "attachment"
     }
+}
+
+internal const val ANDROID_PACKAGE_MIME_TYPE = "application/vnd.android.package-archive"
+
+internal fun ChatAttachment.isAndroidPackage(): Boolean =
+    mimeType.equals(ANDROID_PACKAGE_MIME_TYPE, ignoreCase = true) || name.endsWith(".apk", ignoreCase = true)
+
+internal fun ChatAttachment.androidOpenMimeType(): String = when {
+    isAndroidPackage() -> ANDROID_PACKAGE_MIME_TYPE
+    mimeType.isNotBlank() -> mimeType
+    else -> "application/octet-stream"
 }
 
 internal fun ChatAttachment.isTextPreviewable(): Boolean {

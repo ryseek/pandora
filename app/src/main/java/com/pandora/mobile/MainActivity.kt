@@ -73,6 +73,7 @@ import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MicNone
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.InstallMobile
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PushPin
@@ -172,7 +173,7 @@ private val AccentSurface: Color @Composable get() = MaterialTheme.colorScheme.p
 private val Terminal = Color(0xFF111210)
 private val TerminalText = Color(0xFFD8E4D1)
 
-private enum class Screen { Onboarding, Home, Chat, Container, Settings, Plugins, AdbSetup, Archive }
+private enum class Screen { Onboarding, Home, Chat, Container, Settings, Voice, CustomProvider, Plugins, AdbSetup, Archive }
 
 private sealed interface OnboardingState {
     data object Welcome : OnboardingState
@@ -334,6 +335,7 @@ private fun PandoraApp() {
                         onBack = { screen = settingsReturnScreen },
                         onArchive = { screen = Screen.Archive },
                         onPlugins = { screen = Screen.Plugins },
+                        onVoice = { screen = Screen.Voice },
                         onCodexLogin = {
                             // PRoot shares Android's network namespace, so Chrome can return
                             // directly to Codex's localhost callback. This avoids the device-code
@@ -354,11 +356,26 @@ private fun PandoraApp() {
                             RootfsInstaller(context).refreshModelProviderConfig()
                         },
                         onChangeModelProvider = {
-                            screen = Screen.Onboarding
+                            screen = Screen.CustomProvider
                         },
                         onStopAllForRepair = {
                             chatManager.stopAll()
                             sessionManager.stopAll()
+                        },
+                    )
+                    Screen.Voice -> VoiceSettingsScreen(onBack = { screen = Screen.Settings })
+                    Screen.CustomProvider -> CustomProviderOnboarding(
+                        existingProvider = ModelProviderSettings.savedCustomProvider(context),
+                        hasSavedApiKey = ModelProviderSecretStore.hasApiKey(context),
+                        onBack = { screen = Screen.Settings },
+                        onContinue = { provider, apiKey ->
+                            runCatching {
+                                chatManager.stopAll()
+                                if (apiKey.isNotBlank()) ModelProviderSecretStore.saveApiKey(context, apiKey)
+                                ModelProviderSettings.useCustomProvider(context, provider)
+                                RootfsInstaller(context).refreshModelProviderConfig()
+                                screen = Screen.Settings
+                            }.exceptionOrNull()?.message
                         },
                     )
                     Screen.Plugins -> PluginsScreen(
@@ -2909,6 +2926,7 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
     val chatScope = rememberCoroutineScope()
     val messages by session.messages.collectAsState()
     val state by session.state.collectAsState()
+    val interrupting by session.interrupting.collectAsState()
     val models by session.models.collectAsState()
     val selectedModel by session.selectedModel.collectAsState()
     var modelMenuOpen by remember { mutableStateOf(false) }
@@ -3122,6 +3140,15 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
                         speaking = playback is SpeechPlaybackState.Loading || playback is SpeechPlaybackState.Speaking,
                         onSpeak = { readAloud(message.text) },
                         onPreviewAttachment = { previewAttachment = it },
+                        onOpenAttachment = { attachment ->
+                            if (!ChatAttachmentStore.openWithAndroid(context, attachment)) {
+                                attachmentError = if (attachment.isAndroidPackage()) {
+                                    "Android could not open the package installer"
+                                } else {
+                                    "No Android app can open this file type"
+                                }
+                            }
+                        },
                     )
                 }
             }
@@ -3222,8 +3249,7 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
                     modifier = Modifier.weight(1f).heightIn(min = 40.dp, max = 132.dp),
                     textStyle = TextStyle(color = Ink, fontSize = 15.sp, lineHeight = 21.sp),
                     cursorBrush = SolidColor(Accent),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { submit() }),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                     decorationBox = { inner ->
                         Box(
                             modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
@@ -3267,18 +3293,41 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
                         )
                     }
                 }
+                val running = state is CodexChatState.Running
                 val canSend = ready && (draft.isNotBlank() || pendingAttachments.isNotEmpty())
+                val actionEnabled = if (running) !interrupting else canSend
                 Box(
                     Modifier
-                        .size(40.dp)
-                        .background(if (canSend) Accent else Line, CircleShape)
-                        .clickable(enabled = canSend, onClick = { submit() }),
+                        .size(48.dp)
+                        .background(
+                            when {
+                                running && interrupting -> MaterialTheme.colorScheme.errorContainer
+                                running -> MaterialTheme.colorScheme.error
+                                canSend -> Accent
+                                else -> Line
+                            },
+                            CircleShape,
+                        )
+                        .clickable(
+                            enabled = actionEnabled,
+                            onClickLabel = if (running) "Stop Codex" else "Send message",
+                            onClick = { if (running) session.interrupt() else submit() },
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        Icons.AutoMirrored.Rounded.Send,
-                        contentDescription = "Send message",
-                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary else Muted,
+                        if (running) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.Send,
+                        contentDescription = when {
+                            running && interrupting -> "Stopping Codex"
+                            running -> "Stop Codex"
+                            else -> "Send message"
+                        },
+                        tint = when {
+                            running && interrupting -> MaterialTheme.colorScheme.onErrorContainer
+                            running -> MaterialTheme.colorScheme.onError
+                            canSend -> MaterialTheme.colorScheme.onPrimary
+                            else -> Muted
+                        },
                         modifier = Modifier.size(19.dp),
                     )
                 }
@@ -3374,6 +3423,7 @@ private fun ChatMessageRow(
     speaking: Boolean = false,
     onSpeak: () -> Unit = {},
     onPreviewAttachment: (ChatAttachment) -> Unit = {},
+    onOpenAttachment: (ChatAttachment) -> Unit = {},
 ) {
     when (message.role) {
         ChatRole.SYSTEM -> Row(
@@ -3396,6 +3446,7 @@ private fun ChatMessageRow(
             speaking = speaking,
             onSpeak = onSpeak,
             onPreviewAttachment = onPreviewAttachment,
+            onOpenAttachment = onOpenAttachment,
         )
     }
 }
@@ -3499,6 +3550,7 @@ private fun SentAttachmentPreview(
 private fun AgentAttachmentGroup(
     attachments: List<ChatAttachment>,
     onPreview: (ChatAttachment) -> Unit,
+    onOpen: (ChatAttachment) -> Unit,
 ) {
     val images = attachments.filter { it.kind == ChatAttachmentKind.IMAGE }
     val files = attachments.filter { it.kind == ChatAttachmentKind.FILE }
@@ -3520,7 +3572,11 @@ private fun AgentAttachmentGroup(
                     .background(SoftSurface, RoundedCornerShape(14.dp)),
             ) {
                 files.forEachIndexed { index, attachment ->
-                    AgentFileRow(attachment, onClick = { onPreview(attachment) })
+                    AgentFileRow(
+                        attachment,
+                        onClick = { onPreview(attachment) },
+                        onInstall = { onOpen(attachment) },
+                    )
                     if (index != files.lastIndex) {
                         Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).height(1.dp).background(Line))
                     }
@@ -3531,7 +3587,7 @@ private fun AgentAttachmentGroup(
 }
 
 @Composable
-private fun AgentFileRow(attachment: ChatAttachment, onClick: () -> Unit) {
+private fun AgentFileRow(attachment: ChatAttachment, onClick: () -> Unit, onInstall: () -> Unit) {
     val context = LocalContext.current
     val resolvedSize = remember(attachment.containerPath, attachment.sizeBytes) {
         attachment.sizeBytes ?: ChatAttachmentStore.resolve(context, attachment)?.length()
@@ -3555,7 +3611,15 @@ private fun AgentFileRow(attachment: ChatAttachment, onClick: () -> Unit) {
             Text(attachment.name, color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(formatAttachmentSize(resolvedSize), color = Muted, fontSize = 10.sp)
         }
-        Icon(Icons.Rounded.OpenInFull, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
+        if (attachment.isAndroidPackage()) {
+            TextButton(onClick = onInstall) {
+                Icon(Icons.Rounded.InstallMobile, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("Install")
+            }
+        } else {
+            Icon(Icons.Rounded.OpenInFull, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
+        }
     }
 }
 
@@ -3653,10 +3717,18 @@ private fun AttachmentPreviewDialog(attachment: ChatAttachment, onDismiss: () ->
                     }
                     IconButton(onClick = {
                         if (!ChatAttachmentStore.openWithAndroid(context, attachment)) {
-                            actionMessage = "No Android app can open this file type"
+                            actionMessage = if (attachment.isAndroidPackage()) {
+                                "Android could not open the package installer"
+                            } else {
+                                "No Android app can open this file type"
+                            }
                         }
                     }) {
-                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = "Open in Android", tint = Accent)
+                        Icon(
+                            if (attachment.isAndroidPackage()) Icons.Rounded.InstallMobile else Icons.AutoMirrored.Rounded.OpenInNew,
+                            contentDescription = if (attachment.isAndroidPackage()) "Install APK" else "Open in Android",
+                            tint = Accent,
+                        )
                     }
                     IconButton(onClick = { saveCopy.launch(attachment.name) }) {
                         Icon(Icons.Rounded.Download, contentDescription = "Save a copy", tint = Accent)
@@ -3764,6 +3836,7 @@ private fun AssistantMessage(
     speaking: Boolean,
     onSpeak: () -> Unit,
     onPreviewAttachment: (ChatAttachment) -> Unit,
+    onOpenAttachment: (ChatAttachment) -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(message.id) { mutableStateOf(false) }
@@ -3794,7 +3867,7 @@ private fun AssistantMessage(
         }
         if (message.attachments.isNotEmpty()) {
             Spacer(Modifier.height(if (displayText.isBlank() && !showIdentity) 0.dp else 10.dp))
-            AgentAttachmentGroup(message.attachments, onPreviewAttachment)
+            AgentAttachmentGroup(message.attachments, onPreviewAttachment, onOpenAttachment)
         }
         Row(Modifier.padding(top = 2.dp)) {
             IconButton(

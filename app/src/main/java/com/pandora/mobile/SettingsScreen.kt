@@ -96,6 +96,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onArchive: () -> Unit,
     onPlugins: () -> Unit,
+    onVoice: () -> Unit,
     onCodexLogin: () -> Unit,
     onModelProviderChanged: (ModelProviderMode) -> Unit,
     onChangeModelProvider: () -> Unit,
@@ -103,15 +104,6 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var fontSize by remember { mutableFloatStateOf(AppSettings.terminalFontSize(context)) }
-    val application = context.applicationContext as PandoraApplication
-    val speechManager = application.speechModels
-    val speechStates by speechManager.states.collectAsState()
-    val dictationDiagnostics by application.onDeviceSpeech.diagnostics.collectAsState()
-    var selectedStt by remember { mutableStateOf(AppSettings.speechToTextModel(context)) }
-    var dictationProcessor by remember { mutableStateOf(AppSettings.dictationProcessor(context)) }
-    var refineWithWhisper by remember { mutableStateOf(AppSettings.refineDictationWithWhisper(context)) }
-    var selectedTts by remember { mutableStateOf(AppSettings.textToSpeechModel(context)) }
-    var autoSpeak by remember { mutableStateOf(AppSettings.speakAssistantResponses(context)) }
     var backupBusy by remember { mutableStateOf(false) }
     var backupStatus by remember { mutableStateOf<String?>(null) }
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
@@ -162,27 +154,6 @@ fun SettingsScreen(
             AppSettings.MAX_TERMINAL_FONT_SIZE,
         )
         AppSettings.setTerminalFontSize(context, fontSize)
-    }
-
-    fun deleteSpeechModel(model: SpeechModel) {
-        if (!speechManager.delete(model)) return
-        if (model.id == SpeechModels.WHISPER_TINY_ID) {
-            refineWithWhisper = false
-            AppSettings.setRefineDictationWithWhisper(context, false)
-        }
-        val fallback = SpeechModels.all.firstOrNull {
-            it.kind == model.kind && it.id != model.id && speechManager.isInstalled(it)
-        }
-        when (model.kind) {
-            SpeechModelKind.SPEECH_TO_TEXT -> if (selectedStt == model.id) {
-                selectedStt = fallback?.id ?: SpeechModels.DEFAULT_STT_ID
-                AppSettings.setSpeechToTextModel(context, selectedStt)
-            }
-            SpeechModelKind.TEXT_TO_SPEECH -> if (selectedTts == model.id) {
-                selectedTts = fallback?.id ?: SpeechModels.DEFAULT_TTS_ID
-                AppSettings.setTextToSpeechModel(context, selectedTts)
-            }
-        }
     }
 
     Column(
@@ -296,161 +267,15 @@ fun SettingsScreen(
             Spacer(Modifier.height(30.dp))
             Text("VOICE", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text(
-                "Speech stays on this device. Models download only when you ask and unload after use.",
-                color = SettingsMuted,
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-            )
-            Spacer(Modifier.height(18.dp))
-            Text("Dictation processor", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                if (dictationProcessor == AppSettings.DictationProcessor.CPU) {
-                    "Most compatible · two inference threads"
-                } else {
-                    "Android NNAPI · acceleration depends on device support"
+            SettingsAction(
+                title = "Voice",
+                subtitle = "Dictation, speech models, and reading voice",
+                icon = { tint ->
+                    Icon(Icons.Rounded.GraphicEq, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
                 },
-                color = SettingsMuted,
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
+                enabled = true,
+                onClick = onVoice,
             )
-            Spacer(Modifier.height(10.dp))
-            Row(
-                Modifier.fillMaxWidth().background(SettingsSoftSurface, RoundedCornerShape(14.dp)).padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                ThemeChoice(
-                    label = "CPU",
-                    selected = dictationProcessor == AppSettings.DictationProcessor.CPU,
-                    icon = { tint -> Icon(Icons.Rounded.Memory, null, tint = tint, modifier = Modifier.size(17.dp)) },
-                    modifier = Modifier.weight(1f),
-                    onClick = {
-                        dictationProcessor = AppSettings.DictationProcessor.CPU
-                        AppSettings.setDictationProcessor(context, dictationProcessor)
-                    },
-                )
-                ThemeChoice(
-                    label = "GPU",
-                    selected = dictationProcessor == AppSettings.DictationProcessor.GPU,
-                    icon = { tint -> Icon(Icons.Rounded.Speed, null, tint = tint, modifier = Modifier.size(17.dp)) },
-                    modifier = Modifier.weight(1f),
-                    onClick = {
-                        dictationProcessor = AppSettings.DictationProcessor.GPU
-                        AppSettings.setDictationProcessor(context, dictationProcessor)
-                    },
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                dictationDiagnosticsLabel(dictationDiagnostics),
-                color = if (dictationDiagnostics.droppedAudioMillis > 0) {
-                    androidx.compose.material3.MaterialTheme.colorScheme.error
-                } else {
-                    SettingsMuted
-                },
-                fontSize = 11.sp,
-                lineHeight = 16.sp,
-            )
-
-            Spacer(Modifier.height(22.dp))
-            Text("Dictation model", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(10.dp))
-            SpeechModels.all.filter { it.kind == SpeechModelKind.SPEECH_TO_TEXT }.forEach { model ->
-                SpeechModelRow(
-                    model = model,
-                    selected = selectedStt == model.id,
-                    state = speechStates[model.id] ?: SpeechModelDownload.NotInstalled,
-                    onSelect = {
-                        selectedStt = model.id
-                        AppSettings.setSpeechToTextModel(context, model.id)
-                    },
-                    onDownload = {
-                        speechManager.download(model)
-                    },
-                    onDelete = { deleteSpeechModel(model) },
-                )
-                Spacer(Modifier.height(10.dp))
-            }
-
-            val whisperInstalled = speechStates[SpeechModels.WHISPER_TINY_ID] is SpeechModelDownload.Installed
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = whisperInstalled) {
-                        refineWithWhisper = !refineWithWhisper
-                        AppSettings.setRefineDictationWithWhisper(context, refineWithWhisper)
-                    }
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f).padding(end = 16.dp)) {
-                    Text(
-                        "Refine final transcript with Whisper",
-                        color = if (whisperInstalled) SettingsInk else SettingsMuted,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        if (whisperInstalled) {
-                            "Keep Kroko's live text, then improve it after you stop recording."
-                        } else {
-                            "Download Whisper Tiny above to enable the optional second pass."
-                        },
-                        color = SettingsMuted,
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp,
-                    )
-                }
-                Switch(
-                    checked = refineWithWhisper && whisperInstalled,
-                    onCheckedChange = { enabled ->
-                        refineWithWhisper = enabled
-                        AppSettings.setRefineDictationWithWhisper(context, enabled)
-                    },
-                    enabled = whisperInstalled,
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-            Text("Reading voice", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(10.dp))
-            SpeechModels.all.filter { it.kind == SpeechModelKind.TEXT_TO_SPEECH }.forEach { model ->
-                SpeechModelRow(
-                    model = model,
-                    selected = selectedTts == model.id,
-                    state = speechStates[model.id] ?: SpeechModelDownload.NotInstalled,
-                    onSelect = {
-                        selectedTts = model.id
-                        AppSettings.setTextToSpeechModel(context, model.id)
-                    },
-                    onDownload = {
-                        selectedTts = model.id
-                        AppSettings.setTextToSpeechModel(context, model.id)
-                        speechManager.download(model)
-                    },
-                    onDelete = { deleteSpeechModel(model) },
-                )
-                Spacer(Modifier.height(10.dp))
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Read new replies aloud", color = SettingsInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(3.dp))
-                    Text("Off by default to save battery.", color = SettingsMuted, fontSize = 12.sp)
-                }
-                Switch(
-                    checked = autoSpeak,
-                    onCheckedChange = {
-                        autoSpeak = it
-                        AppSettings.setSpeakAssistantResponses(context, it)
-                    },
-                )
-            }
 
             Spacer(Modifier.height(30.dp))
             Text("TERMINAL", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -768,6 +593,225 @@ fun SettingsScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+fun VoiceSettingsScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val application = context.applicationContext as PandoraApplication
+    val speechManager = application.speechModels
+    val speechStates by speechManager.states.collectAsState()
+    val dictationDiagnostics by application.onDeviceSpeech.diagnostics.collectAsState()
+    var selectedStt by remember { mutableStateOf(AppSettings.speechToTextModel(context)) }
+    var dictationProcessor by remember { mutableStateOf(AppSettings.dictationProcessor(context)) }
+    var refineWithWhisper by remember { mutableStateOf(AppSettings.refineDictationWithWhisper(context)) }
+    var selectedTts by remember { mutableStateOf(AppSettings.textToSpeechModel(context)) }
+    var autoSpeak by remember { mutableStateOf(AppSettings.speakAssistantResponses(context)) }
+
+    fun deleteSpeechModel(model: SpeechModel) {
+        if (!speechManager.delete(model)) return
+        if (model.id == SpeechModels.WHISPER_TINY_ID) {
+            refineWithWhisper = false
+            AppSettings.setRefineDictationWithWhisper(context, false)
+        }
+        val fallback = SpeechModels.all.firstOrNull {
+            it.kind == model.kind && it.id != model.id && speechManager.isInstalled(it)
+        }
+        when (model.kind) {
+            SpeechModelKind.SPEECH_TO_TEXT -> if (selectedStt == model.id) {
+                selectedStt = fallback?.id ?: SpeechModels.DEFAULT_STT_ID
+                AppSettings.setSpeechToTextModel(context, selectedStt)
+            }
+            SpeechModelKind.TEXT_TO_SPEECH -> if (selectedTts == model.id) {
+                selectedTts = fallback?.id ?: SpeechModels.DEFAULT_TTS_ID
+                AppSettings.setTextToSpeechModel(context, selectedTts)
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(38.dp).background(SettingsSoftSurface, CircleShape).clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "Back",
+                    tint = SettingsInk,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Text("Voice", color = SettingsInk, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        }
+
+        Box(Modifier.fillMaxWidth().height(1.dp).background(SettingsLine))
+
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(22.dp)) {
+            Text(
+                "Speech stays on this device. Models download only when you ask and unload after use.",
+                color = SettingsMuted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(24.dp))
+            Text("DICTATION", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(14.dp))
+            Text("Dictation processor", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (dictationProcessor == AppSettings.DictationProcessor.CPU) {
+                    "Most compatible · two inference threads"
+                } else {
+                    "Android NNAPI · acceleration depends on device support"
+                },
+                color = SettingsMuted,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier.fillMaxWidth().background(SettingsSoftSurface, RoundedCornerShape(14.dp)).padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ThemeChoice(
+                    label = "CPU",
+                    selected = dictationProcessor == AppSettings.DictationProcessor.CPU,
+                    icon = { tint -> Icon(Icons.Rounded.Memory, null, tint = tint, modifier = Modifier.size(17.dp)) },
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        dictationProcessor = AppSettings.DictationProcessor.CPU
+                        AppSettings.setDictationProcessor(context, dictationProcessor)
+                    },
+                )
+                ThemeChoice(
+                    label = "GPU",
+                    selected = dictationProcessor == AppSettings.DictationProcessor.GPU,
+                    icon = { tint -> Icon(Icons.Rounded.Speed, null, tint = tint, modifier = Modifier.size(17.dp)) },
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        dictationProcessor = AppSettings.DictationProcessor.GPU
+                        AppSettings.setDictationProcessor(context, dictationProcessor)
+                    },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                dictationDiagnosticsLabel(dictationDiagnostics),
+                color = if (dictationDiagnostics.droppedAudioMillis > 0) {
+                    androidx.compose.material3.MaterialTheme.colorScheme.error
+                } else {
+                    SettingsMuted
+                },
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+            )
+
+            Spacer(Modifier.height(22.dp))
+            Text("Dictation model", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(10.dp))
+            SpeechModels.all.filter { it.kind == SpeechModelKind.SPEECH_TO_TEXT }.forEach { model ->
+                SpeechModelRow(
+                    model = model,
+                    selected = selectedStt == model.id,
+                    state = speechStates[model.id] ?: SpeechModelDownload.NotInstalled,
+                    onSelect = {
+                        selectedStt = model.id
+                        AppSettings.setSpeechToTextModel(context, model.id)
+                    },
+                    onDownload = { speechManager.download(model) },
+                    onDelete = { deleteSpeechModel(model) },
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+
+            val whisperInstalled = speechStates[SpeechModels.WHISPER_TINY_ID] is SpeechModelDownload.Installed
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = whisperInstalled) {
+                        refineWithWhisper = !refineWithWhisper
+                        AppSettings.setRefineDictationWithWhisper(context, refineWithWhisper)
+                    }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                    Text(
+                        "Refine final transcript with Whisper",
+                        color = if (whisperInstalled) SettingsInk else SettingsMuted,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        if (whisperInstalled) {
+                            "Keep Kroko's live text, then improve it after you stop recording."
+                        } else {
+                            "Download Whisper Tiny above to enable the optional second pass."
+                        },
+                        color = SettingsMuted,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                    )
+                }
+                Switch(
+                    checked = refineWithWhisper && whisperInstalled,
+                    onCheckedChange = { enabled ->
+                        refineWithWhisper = enabled
+                        AppSettings.setRefineDictationWithWhisper(context, enabled)
+                    },
+                    enabled = whisperInstalled,
+                )
+            }
+
+            Spacer(Modifier.height(28.dp))
+            Text("READING", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(14.dp))
+            Text("Reading voice", color = SettingsInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(10.dp))
+            SpeechModels.all.filter { it.kind == SpeechModelKind.TEXT_TO_SPEECH }.forEach { model ->
+                SpeechModelRow(
+                    model = model,
+                    selected = selectedTts == model.id,
+                    state = speechStates[model.id] ?: SpeechModelDownload.NotInstalled,
+                    onSelect = {
+                        selectedTts = model.id
+                        AppSettings.setTextToSpeechModel(context, model.id)
+                    },
+                    onDownload = {
+                        selectedTts = model.id
+                        AppSettings.setTextToSpeechModel(context, model.id)
+                        speechManager.download(model)
+                    },
+                    onDelete = { deleteSpeechModel(model) },
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Read new replies aloud", color = SettingsInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(3.dp))
+                    Text("Off by default to save battery.", color = SettingsMuted, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = autoSpeak,
+                    onCheckedChange = {
+                        autoSpeak = it
+                        AppSettings.setSpeakAssistantResponses(context, it)
+                    },
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+        }
     }
 }
 
