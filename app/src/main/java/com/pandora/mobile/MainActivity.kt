@@ -143,6 +143,7 @@ import com.pandora.mobile.linux.ChatAttachment
 import com.pandora.mobile.linux.ChatAttachmentKind
 import com.pandora.mobile.linux.ChatMessage
 import com.pandora.mobile.linux.ChatRole
+import com.pandora.mobile.linux.SystemMessageTone
 import com.pandora.mobile.linux.CodexChatSession
 import com.pandora.mobile.linux.CodexChatState
 import com.pandora.mobile.linux.CodexThreadCatalog
@@ -294,14 +295,19 @@ private fun PandoraApp() {
                         if (chat == null) {
                             LaunchedEffect(Unit) { screen = Screen.Home }
                         } else {
-                            ChatScreen(
-                                session = chat,
-                                onBack = { screen = Screen.Home },
-                                onSettings = {
-                                    settingsReturnScreen = Screen.Chat
-                                    screen = Screen.Settings
-                                },
-                            )
+                            androidx.compose.runtime.key(chat.id) {
+                                ChatScreen(
+                                    session = chat,
+                                    onBack = { screen = Screen.Home },
+                                    onNewChat = {
+                                        selectedChatSessionId = chatManager.create(cwd = chat.workingDirectory).id
+                                    },
+                                    onSettings = {
+                                        settingsReturnScreen = Screen.Chat
+                                        screen = Screen.Settings
+                                    },
+                                )
+                            }
                         }
                     }
                     Screen.Container -> {
@@ -2868,7 +2874,12 @@ private fun Header(title: String, detail: String? = null, onBack: () -> Unit, da
 }
 
 @Composable
-private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings: () -> Unit) {
+private fun ChatScreen(
+    session: CodexChatSession,
+    onBack: () -> Unit,
+    onNewChat: () -> Unit,
+    onSettings: () -> Unit,
+) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val application = context.applicationContext as PandoraApplication
@@ -2911,6 +2922,49 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
             dictation is DictationState.Transcribing
         ) {
             speech.cancelDictation()
+        }
+        val command = parseSlashCommand(draft)
+        if (command != null) {
+            if (command is SlashCommandParseResult.Invalid) {
+                session.showCommandError(command.message)
+                return
+            }
+            command as SlashCommandParseResult.Command
+            if (pendingAttachments.isNotEmpty()) {
+                session.showCommandError("Slash commands cannot be sent with attachments. Remove them and try again.")
+                return
+            }
+            when (command.id) {
+                SlashCommandId.COMPACT -> if (!session.compact()) return
+                SlashCommandId.REVIEW -> if (!session.reviewUncommittedChanges()) return
+                SlashCommandId.STATUS -> session.showStatus()
+                SlashCommandId.MODEL -> {
+                    val query = command.argument
+                    if (query == null) {
+                        if (models.isEmpty()) {
+                            session.showCommandError("The model list is not available yet. Try again in a moment.")
+                            return
+                        }
+                        modelMenuOpen = true
+                    } else {
+                        val selected = models.firstOrNull {
+                            it.model.equals(query, ignoreCase = true) ||
+                                it.id.equals(query, ignoreCase = true) ||
+                                it.displayName.equals(query, ignoreCase = true)
+                        }
+                        if (selected == null) {
+                            session.showCommandError("Model '$query' is not available. Use /model to choose one.")
+                            return
+                        }
+                        session.selectModel(selected.model)
+                        session.showCommandInfo("Model changed to ${selected.displayName}.")
+                    }
+                }
+                SlashCommandId.NEW -> onNewChat()
+            }
+            draft = ""
+            dictationPrefix = ""
+            return
         }
         if (session.send(draft, pendingAttachments.toList())) {
             draft = ""
@@ -3158,6 +3212,15 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
                 .background(SoftSurface, RoundedCornerShape(24.dp))
                 .padding(horizontal = 6.dp, vertical = 6.dp),
         ) {
+            val commandSuggestions = slashCommandSuggestions(draft)
+            if (commandSuggestions.isNotEmpty()) {
+                SlashCommandPalette(
+                    commands = commandSuggestions,
+                    onSelect = { command ->
+                        draft = if (command.id == SlashCommandId.MODEL) "/model " else command.usage
+                    },
+                )
+            }
             if (pendingAttachments.isNotEmpty()) {
                 Row(
                     Modifier
@@ -3332,6 +3395,54 @@ private fun ChatScreen(session: CodexChatSession, onBack: () -> Unit, onSettings
 }
 
 @Composable
+private fun SlashCommandPalette(
+    commands: List<SlashCommandDefinition>,
+    onSelect: (SlashCommandDefinition) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 5.dp, end = 5.dp, top = 3.dp, bottom = 5.dp),
+    ) {
+        commands.forEachIndexed { index, command ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clickable(
+                        onClickLabel = "Use ${command.usage}",
+                        onClick = { onSelect(command) },
+                    )
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    command.usage,
+                    color = Accent,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.widthIn(min = 104.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    command.description,
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            if (index != commands.lastIndex) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+            }
+        }
+    }
+}
+
+@Composable
 private fun VoiceStatus(label: String, active: Boolean) {
     Row(
         Modifier
@@ -3391,12 +3502,23 @@ private fun ChatMessageRow(
         ChatRole.SYSTEM -> Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(12.dp))
+                .background(
+                    if (message.systemTone == SystemMessageTone.ERROR) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.primaryContainer
+                    },
+                    RoundedCornerShape(12.dp),
+                )
                 .padding(horizontal = 13.dp, vertical = 10.dp),
         ) {
             Text(
                 message.text,
-                color = MaterialTheme.colorScheme.onErrorContainer,
+                color = if (message.systemTone == SystemMessageTone.ERROR) {
+                    MaterialTheme.colorScheme.onErrorContainer
+                } else {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                },
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
             )

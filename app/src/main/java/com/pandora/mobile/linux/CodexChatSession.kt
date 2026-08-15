@@ -25,6 +25,8 @@ import org.json.JSONObject
 
 enum class ChatRole { USER, ASSISTANT, SYSTEM }
 
+enum class SystemMessageTone { INFO, ERROR }
+
 enum class ChatAttachmentKind { IMAGE, FILE }
 
 data class ChatAttachment(
@@ -40,6 +42,7 @@ data class ChatMessage(
     val role: ChatRole,
     val text: String,
     val attachments: List<ChatAttachment> = emptyList(),
+    val systemTone: SystemMessageTone = SystemMessageTone.ERROR,
 )
 
 data class CodexModel(
@@ -68,6 +71,8 @@ class CodexChatSession(
     private val resumeThreadId: String? = null,
     private val cwd: String = "/root",
 ) {
+    private enum class SessionOperation { COMPACT, REVIEW }
+
     private val appContext = context.applicationContext
     private val customProvider = ModelProviderSettings.customProvider(appContext)
     private val installer = RootfsInstaller(appContext)
@@ -79,6 +84,7 @@ class CodexChatSession(
     private val writerLock = Any()
     private val turnRequestIds = mutableSetOf<Int>()
     private val turnRequestOrdinals = mutableMapOf<Int, Int>()
+    private val operationRequestIds = mutableMapOf<Int, SessionOperation>()
     private val assistantMessageIds = mutableMapOf<String, String>()
     @Volatile private var activeTurnId: String? = null
     @Volatile private var interruptRequested = false
@@ -117,6 +123,9 @@ class CodexChatSession(
     /** The requested or resolved thread identity, used to avoid opening a second writer. */
     val activeThreadId: String?
         get() = threadId ?: resumeThreadId
+
+    val workingDirectory: String
+        get() = cwd
 
     init {
         scope.launch { start() }
@@ -172,11 +181,76 @@ class CodexChatSession(
         return sendInterrupt(activeThread, turn)
     }
 
-    fun selectModel(model: String) {
-        if (_models.value.none { it.model == model }) return
+    fun selectModel(model: String): Boolean {
+        if (_models.value.none { it.model == model }) return false
         _selectedModel.value = model
         this.model = model
         if (_state.value is CodexChatState.Ready) _state.value = CodexChatState.Ready(model)
+        return true
+    }
+
+    fun compact(): Boolean = startOperation(
+        operation = SessionOperation.COMPACT,
+        method = "thread/compact/start",
+        params = JSONObject().put("threadId", threadId),
+        progress = "Compacting this conversation…",
+    )
+
+    fun reviewUncommittedChanges(): Boolean = startOperation(
+        operation = SessionOperation.REVIEW,
+        method = "review/start",
+        params = JSONObject()
+            .put("threadId", threadId)
+            .put("delivery", "inline")
+            .put("target", JSONObject().put("type", "uncommittedChanges")),
+        progress = "Reviewing uncommitted changes…",
+    )
+
+    fun showStatus() {
+        val stateLabel = when (_state.value) {
+            is CodexChatState.Starting -> "Starting"
+            is CodexChatState.Ready -> "Ready"
+            is CodexChatState.Running -> "Working"
+            is CodexChatState.Failed -> "Failed"
+            CodexChatState.Closed -> "Closed"
+        }
+        addSystemMessage(
+            buildString {
+                appendLine("Session status")
+                appendLine("Model: $model")
+                appendLine("Working directory: $cwd")
+                appendLine("Thread: ${activeThreadId ?: "Starting"}")
+                appendLine("State: $stateLabel")
+                append("Access: Full workspace · approvals disabled")
+            },
+            SystemMessageTone.INFO,
+        )
+    }
+
+    fun showCommandInfo(detail: String) = addSystemMessage(detail, SystemMessageTone.INFO)
+
+    fun showCommandError(detail: String) = addSystemMessage(detail, SystemMessageTone.ERROR)
+
+    private fun startOperation(
+        operation: SessionOperation,
+        method: String,
+        params: JSONObject,
+        progress: String,
+    ): Boolean {
+        if (threadId == null || _state.value !is CodexChatState.Ready) return false
+        val requestId = nextRequestId.getAndIncrement()
+        synchronized(operationRequestIds) { operationRequestIds[requestId] = operation }
+        activeTurnId = null
+        interruptRequested = false
+        _interrupting.value = false
+        _state.value = CodexChatState.Running(model)
+        addSystemMessage(progress, SystemMessageTone.INFO)
+        if (sendRequest(requestId, method, params)) return true
+
+        synchronized(operationRequestIds) { operationRequestIds.remove(requestId) }
+        addSystemMessage("Could not start ${operation.name.lowercase()}.")
+        if (!closed.get()) _state.value = CodexChatState.Ready(model)
+        return false
     }
 
     fun close() {
@@ -262,6 +336,12 @@ class CodexChatSession(
                 interruptRequested = false
                 _interrupting.value = false
                 addSystemMessage("Could not stop Codex: $detail")
+            } else if (synchronized(operationRequestIds) { operationRequestIds.remove(id) } != null) {
+                activeTurnId = null
+                interruptRequested = false
+                _interrupting.value = false
+                addSystemMessage(detail)
+                if (!closed.get()) _state.value = CodexChatState.Ready(model)
             } else if (synchronized(turnRequestIds) { turnRequestIds.remove(id) }) {
                 synchronized(turnRequestIds) { turnRequestOrdinals.remove(id) }
                 activeTurnId = null
@@ -324,6 +404,16 @@ class CodexChatSession(
                 }
             }
             else -> {
+                val operation = synchronized(operationRequestIds) { operationRequestIds.remove(id) }
+                if (operation == SessionOperation.REVIEW) {
+                    message.optJSONObject("result")
+                        ?.optJSONObject("turn")
+                        ?.optString("id")
+                        ?.takeIf(String::isNotBlank)
+                        ?.let(::onTurnStarted)
+                    return
+                }
+                if (operation == SessionOperation.COMPACT) return
                 val userOrdinal = synchronized(turnRequestIds) {
                     turnRequestIds.remove(id)
                     turnRequestOrdinals.remove(id)
@@ -446,6 +536,14 @@ class CodexChatSession(
                 _interrupting.value = false
                 if (!closed.get()) _state.value = CodexChatState.Ready(model)
             }
+            "thread/compacted" -> {
+                addSystemMessage("Conversation compacted.", SystemMessageTone.INFO)
+                activeTurnId = null
+                interruptRequested = false
+                interruptRequestId = null
+                _interrupting.value = false
+                if (!closed.get()) _state.value = CodexChatState.Ready(model)
+            }
             "error" -> {
                 val detail = params.optString("message", "Codex reported an error")
                 addSystemMessage(detail)
@@ -520,9 +618,16 @@ class CodexChatSession(
         _messages.value = current
     }
 
-    private fun addSystemMessage(detail: String) {
+    private fun addSystemMessage(
+        detail: String,
+        tone: SystemMessageTone = SystemMessageTone.ERROR,
+    ) {
         if (detail.isBlank()) return
-        _messages.value = _messages.value + ChatMessage(role = ChatRole.SYSTEM, text = detail)
+        _messages.value = _messages.value + ChatMessage(
+            role = ChatRole.SYSTEM,
+            text = detail,
+            systemTone = tone,
+        )
     }
 
     private fun fail(detail: String) {

@@ -9,6 +9,7 @@ All notable changes to Pandora are documented here. The format follows
 ### Added
 
 - Added one-tap general and project chat creation from Home, plus a dismissible first-project prompt.
+- Added a discoverable chat slash-command palette with `/compact`, `/review`, `/status`, `/model`, and `/new` support.
 
 ### Changed
 
