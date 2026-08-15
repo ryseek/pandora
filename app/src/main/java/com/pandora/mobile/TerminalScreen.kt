@@ -339,7 +339,7 @@ private fun TerminalAccessoryRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TerminalKey("ESC", Modifier.weight(1f)) { send(byteArrayOf(0x1B)) }
-        TerminalKey("⇥", Modifier.weight(1f)) { send(byteArrayOf(0x09)) }
+        TerminalKey("TAB", Modifier.weight(1f)) { send(byteArrayOf(0x09)) }
         TerminalKey("CTRL", Modifier.weight(1f), ctrlActive, onCtrl)
         TerminalKey("ALT", Modifier.weight(1f), altActive, onAlt)
         TerminalKey("−", Modifier.weight(1f)) { send(byteArrayOf('-'.code.toByte())) }

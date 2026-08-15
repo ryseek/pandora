@@ -124,13 +124,10 @@ class PtyTerminalSession(
     }
 
     private fun buildCommand(): List<String> {
-        val shell = if (
-            persistentSessionName != null && File(installer.workspace, ".local/bin/zmx").isFile
-        ) {
-            listOf("/root/.local/bin/zmx", "attach", persistentSessionName, "/bin/sh", "-l", "-i")
-        } else {
-            listOf("/bin/sh", "-l", "-i")
-        }
+        val shell = terminalShellCommand(
+            persistentSessionName = persistentSessionName,
+            zmxAvailable = File(installer.workspace, ".local/bin/zmx").isFile,
+        )
         return listOf(
         installer.proot.absolutePath,
         "-0",
@@ -157,4 +154,13 @@ class PtyTerminalSession(
         "COLORTERM" to "truecolor",
         "LANG" to "C.UTF-8",
     )
+}
+
+internal fun terminalShellCommand(
+    persistentSessionName: String?,
+    zmxAvailable: Boolean,
+): List<String> = if (persistentSessionName != null && zmxAvailable) {
+    listOf("/root/.local/bin/zmx", "attach", persistentSessionName, "/bin/bash", "-l", "-i")
+} else {
+    listOf("/bin/bash", "-l", "-i")
 }

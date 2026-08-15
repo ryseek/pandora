@@ -21,6 +21,7 @@ class CodexChatSessionManager(private val context: Context) {
     private val _sessions = MutableStateFlow<List<CodexChatSession>>(emptyList())
     val sessions: StateFlow<List<CodexChatSession>> = _sessions.asStateFlow()
     private val observationJobs = mutableMapOf<String, Job>()
+    private val notifications = AgentNotificationController(appContext)
     private var staleProcessesCleaned = false
 
     @Synchronized
@@ -85,7 +86,14 @@ class CodexChatSessionManager(private val context: Context) {
 
     private fun observe(session: CodexChatSession) {
         observationJobs[session.id] = scope.launch {
-            session.state.collect { refreshForegroundService() }
+            var previous: CodexChatState = session.state.value
+            session.state.collect { current ->
+                refreshForegroundService()
+                if (previous is CodexChatState.Running && current is CodexChatState.Ready) {
+                    notifications.send("Codex is ready", "Your task finished and is ready to review.")
+                }
+                previous = current
+            }
         }
     }
 

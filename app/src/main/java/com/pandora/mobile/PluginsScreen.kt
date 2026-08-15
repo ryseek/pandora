@@ -63,7 +63,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
 @Composable
-fun PluginsScreen(
+fun SkillsScreen(
     state: AdbPluginState,
     onBack: () -> Unit,
     onOpenSetup: () -> Unit,
@@ -103,9 +103,9 @@ fun PluginsScreen(
         }
     }
 
-    PluginPage(title = "Plugins", onBack = onBack) {
+    PluginPage(title = "Skills", onBack = onBack) {
         Text(
-            "Plugins ask before taking control of your device.",
+            "Manage how Codex works with Pandora and this device.",
             color = MaterialThemeColors.muted,
             fontSize = 13.sp,
             lineHeight = 18.sp,
@@ -123,7 +123,7 @@ fun PluginsScreen(
                 Column(Modifier.weight(1f)) {
                     Text("ADB phone control", color = MaterialThemeColors.ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(2.dp))
-                    Text("By Pandora · device plugin", color = MaterialThemeColors.muted, fontSize = 12.sp)
+                    Text("By Pandora · device skill", color = MaterialThemeColors.muted, fontSize = 12.sp)
                 }
                 Switch(checked = state.enabled, onCheckedChange = onEnabledChange)
             }

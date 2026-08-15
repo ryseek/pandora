@@ -6,6 +6,23 @@ All notable changes to Pandora are documented here. The format follows
 
 ## Unreleased
 
+## 0.1.3 - 2026-08-15
+
+### Added
+
+- Automatic completion notifications after Codex confirms that a turn has completed and the chat is ready.
+
+### Changed
+
+- Renamed the Plugins settings section to Skills and presented ADB phone control as a device skill.
+- Made the terminal accessory's CLI-completion key explicitly labeled `TAB`.
+
+### Fixed
+
+- Start each project chat's Codex app-server process in the project directory, preventing project debug output from leaking into `/root`.
+- Render verified local file deliveries as attachment cards even in long or restored chat responses instead of leaving raw `/root` links visible.
+- Start Linux terminals with Bash so the `TAB` accessory key performs shell completion instead of inserting whitespace.
+
 ## 0.1.2 - 2026-08-14
 
 ### Added

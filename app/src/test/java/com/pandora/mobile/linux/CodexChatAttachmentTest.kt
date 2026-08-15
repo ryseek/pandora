@@ -55,6 +55,14 @@ class CodexChatAttachmentTest {
     }
 
     @Test
+    fun removesAttachmentLinkAfterALongResponseEvenWhenMetadataIsUnavailable() {
+        val longBody = (1..2_000).joinToString(" ") { "word$it" }
+        val text = "$longBody\n\n- [result.zip](/root/project/result.zip)"
+
+        assertEquals(longBody, agentDisplayText(text))
+    }
+
+    @Test
     fun restoresOriginalNameFromStoredAttachmentPath() {
         assertEquals(
             "pandora-projects-final.png",

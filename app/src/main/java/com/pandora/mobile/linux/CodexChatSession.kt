@@ -203,7 +203,7 @@ class CodexChatSession(
                 "Codex CLI is not installed yet. Open a Linux session while online to retry installation."
             }
 
-            val command = installer.containerCommand("/root/.local/bin/codex", "app-server")
+            val command = installer.containerCommandAt(cwd, "/root/.local/bin/codex", "app-server")
             val child = installer.startContainerProcess(command, mergeError = false)
             process = child
             writer = child.outputStream.bufferedWriter()

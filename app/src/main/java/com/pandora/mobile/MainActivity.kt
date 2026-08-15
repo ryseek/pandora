@@ -173,7 +173,7 @@ private val AccentSurface: Color @Composable get() = MaterialTheme.colorScheme.p
 private val Terminal = Color(0xFF111210)
 private val TerminalText = Color(0xFFD8E4D1)
 
-private enum class Screen { Onboarding, Home, Chat, Container, Settings, Voice, CustomProvider, Plugins, AdbSetup, Archive }
+private enum class Screen { Onboarding, Home, Chat, Container, Settings, Voice, CustomProvider, Skills, AdbSetup, Archive }
 
 private sealed interface OnboardingState {
     data object Welcome : OnboardingState
@@ -334,7 +334,7 @@ private fun PandoraApp() {
                         },
                         onBack = { screen = settingsReturnScreen },
                         onArchive = { screen = Screen.Archive },
-                        onPlugins = { screen = Screen.Plugins },
+                        onPlugins = { screen = Screen.Skills },
                         onVoice = { screen = Screen.Voice },
                         onCodexLogin = {
                             // PRoot shares Android's network namespace, so Chrome can return
@@ -378,7 +378,7 @@ private fun PandoraApp() {
                             }.exceptionOrNull()?.message
                         },
                     )
-                    Screen.Plugins -> PluginsScreen(
+                    Screen.Skills -> SkillsScreen(
                         state = adbState,
                         onBack = { screen = Screen.Settings },
                         onOpenSetup = { screen = Screen.AdbSetup },
@@ -386,7 +386,7 @@ private fun PandoraApp() {
                     )
                     Screen.AdbSetup -> AdbSetupScreen(
                         state = adbState,
-                        onBack = { screen = Screen.Plugins },
+                        onBack = { screen = Screen.Skills },
                         onBeginPairing = context.adbPlugin::beginPairing,
                         onRetry = context.adbPlugin::retry,
                     )
@@ -3840,9 +3840,7 @@ private fun AssistantMessage(
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(message.id) { mutableStateOf(false) }
-    val displayText = remember(message.text, message.attachments) {
-        if (message.attachments.isEmpty()) message.text else agentDisplayText(message.text)
-    }
+    val displayText = remember(message.text) { agentDisplayText(message.text) }
     Column(Modifier.fillMaxWidth()) {
         if (showIdentity) {
             Row(verticalAlignment = Alignment.CenterVertically) {

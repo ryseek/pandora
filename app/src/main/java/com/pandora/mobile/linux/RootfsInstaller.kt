@@ -21,7 +21,7 @@ class RootfsInstaller(private val context: Context) {
     val nativeLibDir = File(context.applicationInfo.nativeLibraryDir)
     val tempDir = File(context.cacheDir, "proot-tmp")
     private val marker = File(rootfs, ".pandora-rootfs-v2")
-    private val defaultPackagesMarker = File(rootfs, ".pandora-default-packages-v4")
+    private val defaultPackagesMarker = File(rootfs, ".pandora-default-packages-v5")
 
     fun isSetupComplete(): Boolean =
         marker.isFile &&
@@ -358,7 +358,13 @@ class RootfsInstaller(private val context: Context) {
         return lines.joinToString("\n").trimEnd() + "\n"
     }
 
-    internal fun containerCommand(vararg executableAndArgs: String): List<String> = listOf(
+    internal fun containerCommand(vararg executableAndArgs: String): List<String> =
+        containerCommandAt("/root", *executableAndArgs)
+
+    internal fun containerCommandAt(
+        workingDirectory: String,
+        vararg executableAndArgs: String,
+    ): List<String> = listOf(
         proot.absolutePath,
         "-0",
         "--link2symlink",
@@ -367,7 +373,7 @@ class RootfsInstaller(private val context: Context) {
         "-b", "/proc",
         "-b", "/sys",
         "-b", "${workspace.absolutePath}:/root",
-        "-w", "/root",
+        "-w", validatedContainerWorkingDirectory(workingDirectory),
         *executableAndArgs,
     )
 
@@ -582,6 +588,7 @@ class RootfsInstaller(private val context: Context) {
         val INSTALL_LOCK = Any()
         val PROCESS_IDENTITIES = WeakHashMap<Process, String>()
         val DEFAULT_PACKAGES = listOf(
+            "bash",
             "ca-certificates",
             "curl",
             "util-linux",
@@ -595,4 +602,15 @@ class RootfsInstaller(private val context: Context) {
         const val ZMX_URL = "https://zmx.sh/a/zmx-0.7.0-linux-aarch64.tar.gz"
         const val ZMX_SHA256 = "77599f66124694fae80bbb1d2fa0eafdb8c648b427a048cad90513ecf6136fc9"
     }
+}
+
+internal fun validatedContainerWorkingDirectory(path: String): String {
+    val normalized = path.trimEnd('/').ifBlank { "/root" }
+    require(normalized == "/root" || normalized.startsWith("/root/")) {
+        "Codex working directory must be inside /root"
+    }
+    require(normalized.split('/').none { it == ".." }) {
+        "Codex working directory cannot traverse outside /root"
+    }
+    return normalized
 }

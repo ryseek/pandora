@@ -245,7 +245,7 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(30.dp))
-            Text("PLUGINS", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text("SKILLS", color = SettingsAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(
                 "Extend what Pandora can do on this device.",
@@ -255,8 +255,8 @@ fun SettingsScreen(
             )
             Spacer(Modifier.height(8.dp))
             SettingsAction(
-                title = "Plugins",
-                subtitle = if (AppSettings.adbPluginEnabled(context)) "ADB phone control enabled" else "1 available · none enabled",
+                title = "Skills",
+                subtitle = if (AppSettings.adbPluginEnabled(context)) "ADB phone control enabled" else "Device control and agent notifications",
                 icon = { tint ->
                     Icon(Icons.Rounded.DeveloperMode, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
                 },
