@@ -68,6 +68,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
@@ -1106,7 +1107,9 @@ private fun HomeScreen(
     var actionInFlight by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
     var addProjectStep by remember { mutableStateOf<AddProjectStep?>(null) }
-    var showNewChatDialog by remember { mutableStateOf(false) }
+    var emptyProjectsPromptDismissed by remember(context) {
+        mutableStateOf(AppSettings.emptyProjectsPromptDismissed(context))
+    }
     var collapsedProjects by remember(context) { mutableStateOf(AppSettings.collapsedProjectPaths(context)) }
     val actionScope = rememberCoroutineScope()
     LaunchedEffect(limitRefresh, sessions.size) {
@@ -1212,11 +1215,15 @@ private fun HomeScreen(
                     onAction = { addProjectStep = AddProjectStep.Menu },
                 )
             }
-            if (projects.isEmpty()) {
+            if (projects.isEmpty() && (catalogLoading || !emptyProjectsPromptDismissed)) {
                 item("projects-empty") {
                     EmptyProjectsRow(
                         loading = catalogLoading,
                         onAddProject = { addProjectStep = AddProjectStep.Menu },
+                        onDismiss = {
+                            emptyProjectsPromptDismissed = true
+                            AppSettings.dismissEmptyProjectsPrompt(context)
+                        },
                     )
                 }
             }
@@ -1233,6 +1240,7 @@ private fun HomeScreen(
                             collapsedProjects = if (expanded) collapsedProjects + path else collapsedProjects - path
                             AppSettings.setProjectExpanded(context, path, !expanded)
                         },
+                        onNewChat = { onNewChat(path) },
                         onRename = { renameProject = project; actionError = null },
                         onPin = {
                             actionScope.launch {
@@ -1247,11 +1255,6 @@ private fun HomeScreen(
                         onArchive = { archiveProject = project; actionError = null },
                         onDelete = { deleteProject = project; actionError = null },
                     )
-                }
-                if (expanded && projectEntries.isEmpty()) {
-                    item("project-empty:$path") {
-                        EmptyProjectChatRow(onClick = { onNewChat(path) })
-                    }
                 }
                 if (expanded) {
                     items(projectEntries, key = { it.key }) { entry ->
@@ -1345,7 +1348,7 @@ private fun HomeScreen(
             Row(
                 modifier = Modifier
                     .background(Ink, RoundedCornerShape(24.dp))
-                    .clickable { showNewChatDialog = true }
+                    .clickable(onClickLabel = "Start a new general chat", onClick = { onNewChat(null) })
                     .padding(horizontal = 20.dp, vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1359,21 +1362,6 @@ private fun HomeScreen(
                 Text("New chat", color = Paper, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
         }
-    }
-
-    if (showNewChatDialog) {
-        NewChatProjectDialog(
-            projects = projects,
-            onDismiss = { showNewChatDialog = false },
-            onStartChat = { path ->
-                showNewChatDialog = false
-                onNewChat(path)
-            },
-            onChooseFolder = {
-                showNewChatDialog = false
-                addProjectStep = AddProjectStep.ChooseFolder
-            },
-        )
     }
 
     addProjectStep?.let { initialStep ->
@@ -1654,6 +1642,7 @@ private fun ProjectHeader(
     chatCount: Int,
     expanded: Boolean,
     onToggle: () -> Unit,
+    onNewChat: () -> Unit,
     onRename: () -> Unit,
     onPin: () -> Unit,
     onArchive: () -> Unit,
@@ -1666,6 +1655,7 @@ private fun ProjectHeader(
                 .fillMaxWidth()
                 .combinedClickable(
                     onClick = onToggle,
+                    onClickLabel = if (expanded) "Collapse ${project.name}" else "Expand ${project.name}",
                     onLongClick = { menuExpanded = true },
                     onLongClickLabel = "Project actions",
                 )
@@ -1677,7 +1667,7 @@ private fun ProjectHeader(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    Icons.Rounded.Folder,
+                    if (expanded) Icons.Rounded.FolderOpen else Icons.Rounded.Folder,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSecondaryContainer,
                     modifier = Modifier.size(20.dp),
@@ -1704,15 +1694,10 @@ private fun ProjectHeader(
                         )
                         Spacer(Modifier.width(6.dp))
                     }
-                    Text(
-                        "$chatCount ${if (chatCount == 1) "chat" else "chats"}",
-                        color = Muted,
-                        fontSize = 11.sp,
-                    )
                 }
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    project.displayPath,
+                    "${project.displayPath} · $chatCount ${if (chatCount == 1) "chat" else "chats"}",
                     color = Muted,
                     fontSize = 12.sp,
                     maxLines = 1,
@@ -1720,12 +1705,25 @@ private fun ProjectHeader(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            Icon(
-                if (expanded) Icons.Rounded.KeyboardArrowDown else Icons.AutoMirrored.Rounded.ArrowForward,
-                contentDescription = if (expanded) "Collapse ${project.name}" else "Expand ${project.name}",
-                tint = Muted,
-                modifier = Modifier.size(20.dp),
-            )
+            if (expanded) {
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .background(AccentSurface, CircleShape)
+                        .clickable(
+                            onClickLabel = "Start a new chat in ${project.name}",
+                            onClick = onNewChat,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.Edit,
+                        contentDescription = "New chat in ${project.name}",
+                        tint = Accent,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
         }
         Box(Modifier.align(Alignment.CenterEnd).size(1.dp)) {
             DropdownMenu(
@@ -1778,7 +1776,11 @@ private fun ProjectMenuItem(
 }
 
 @Composable
-private fun EmptyProjectsRow(loading: Boolean, onAddProject: () -> Unit) {
+private fun EmptyProjectsRow(
+    loading: Boolean,
+    onAddProject: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     if (loading) {
         Row(
             Modifier
@@ -1795,97 +1797,57 @@ private fun EmptyProjectsRow(loading: Boolean, onAddProject: () -> Unit) {
             }
         }
     } else {
-        Column(
+        Box(
             Modifier
                 .fillMaxWidth()
                 .background(SoftSurface, RoundedCornerShape(16.dp))
-                .clickable(onClick = onAddProject)
-                .padding(18.dp),
+                .clickable(onClickLabel = "Add a project", onClick = onAddProject),
         ) {
+            Column(Modifier.padding(18.dp)) {
+                Box(
+                    Modifier.size(42.dp).background(AccentSurface, RoundedCornerShape(13.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Folder, contentDescription = null, tint = Accent, modifier = Modifier.size(21.dp))
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("Bring in your first project", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Choose a folder, create a clean workspace, or clone a GitHub repository. Chats stay organized with the code they belong to.",
+                    color = Muted,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    modifier = Modifier.padding(end = 18.dp),
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Add a project", color = Accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowForward,
+                        contentDescription = null,
+                        tint = Accent,
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+            }
             Box(
-                Modifier.size(42.dp).background(AccentSurface, RoundedCornerShape(13.dp)),
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .size(48.dp)
+                    .clickable(onClickLabel = "Dismiss project suggestion", onClick = onDismiss),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.Folder, contentDescription = null, tint = Accent, modifier = Modifier.size(21.dp))
-            }
-            Spacer(Modifier.height(16.dp))
-            Text("Bring in your first project", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Choose a folder, create a clean workspace, or clone a GitHub repository. Chats stay organized with the code they belong to.",
-                color = Muted,
-                fontSize = 13.sp,
-                lineHeight = 19.sp,
-            )
-            Spacer(Modifier.height(16.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Add a project", color = Accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.width(6.dp))
                 Icon(
-                    Icons.AutoMirrored.Rounded.ArrowForward,
-                    contentDescription = null,
-                    tint = Accent,
-                    modifier = Modifier.size(17.dp),
+                    Icons.Rounded.Close,
+                    contentDescription = "Dismiss",
+                    tint = Muted,
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }
     }
-}
-
-@Composable
-private fun EmptyProjectChatRow(onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 54.dp, top = 8.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.Add, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(9.dp))
-        Text("Start a chat in this project", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-    }
-}
-
-@Composable
-private fun NewChatProjectDialog(
-    projects: List<PandoraProject>,
-    onDismiss: () -> Unit,
-    onStartChat: (String?) -> Unit,
-    onChooseFolder: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Start a new chat") },
-        text = {
-            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                if (projects.isNotEmpty()) {
-                    Text("PROJECT", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    projects.forEach { project ->
-                        ProjectChoiceRow(
-                            icon = Icons.Rounded.Folder,
-                            title = project.name,
-                            subtitle = project.displayPath,
-                            onClick = { onStartChat(project.path) },
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-                ProjectChoiceRow(
-                    icon = Icons.Rounded.AutoAwesome,
-                    title = "No project",
-                    subtitle = "Start in your home directory",
-                    onClick = { onStartChat(null) },
-                )
-                ProjectChoiceRow(
-                    icon = Icons.Rounded.Add,
-                    title = "Choose another folder…",
-                    subtitle = "Add it as a project",
-                    onClick = onChooseFolder,
-                )
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 @Composable
@@ -2376,11 +2338,11 @@ private fun WorkspaceEntryRow(
     val subtitle = when (entry) {
         is WorkspaceEntry.Chat -> when (val current = chatState) {
             is CodexChatState.Starting -> "Starting · ${current.detail}"
-            is CodexChatState.Running -> "Working · ${entry.chat.preview.ifBlank { "Codex is responding" }}"
-            is CodexChatState.Ready -> "Ready · ${entry.chat.preview.ifBlank { "Codex conversation" }}"
+            is CodexChatState.Running -> "Working"
+            is CodexChatState.Ready -> "Ready"
             is CodexChatState.Failed -> "Failed · ${current.detail}"
-            CodexChatState.Closed -> "Stopped · ${entry.chat.preview.ifBlank { "Codex conversation" }}"
-            null -> "Stopped · ${entry.chat.preview.ifBlank { "Codex conversation" }}"
+            CodexChatState.Closed -> "Stopped"
+            null -> "Stopped"
         }
         is WorkspaceEntry.TerminalSession -> when (terminalState) {
             PtyTerminalSession.State.PREPARING -> "Active · starting Linux…"

@@ -6,6 +6,15 @@ All notable changes to Pandora are documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- Added one-tap general and project chat creation from Home, plus a dismissible first-project prompt.
+
+### Changed
+
+- Clarified project expansion with open and closed folder states and aligned contextual actions with the existing control system.
+- Simplified chat-list secondary rows to show status and only meaningful progress or error details.
+
 ## 0.1.3 - 2026-08-15
 
 ### Added

@@ -16,6 +16,7 @@ object AppSettings {
     private const val TEXT_TO_SPEECH_MODEL = "text_to_speech_model"
     private const val SPEAK_ASSISTANT_RESPONSES = "speak_assistant_responses"
     private const val ONBOARDING_COMPLETED = "onboarding_completed"
+    private const val EMPTY_PROJECTS_PROMPT_DISMISSED = "empty_projects_prompt_dismissed"
     private const val COLLAPSED_PROJECT_PATHS = "collapsed_project_paths"
     private const val ADB_PLUGIN_ENABLED = "adb_plugin_enabled"
     private const val AGENT_NOTIFICATIONS_ENABLED = "agent_notifications_enabled"
@@ -111,6 +112,15 @@ object AppSettings {
     fun setOnboardingCompleted(context: Context, completed: Boolean) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit().putBoolean(ONBOARDING_COMPLETED, completed).apply()
+    }
+
+    fun emptyProjectsPromptDismissed(context: Context): Boolean =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(EMPTY_PROJECTS_PROMPT_DISMISSED, false)
+
+    fun dismissEmptyProjectsPrompt(context: Context) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(EMPTY_PROJECTS_PROMPT_DISMISSED, true).apply()
     }
 
     fun collapsedProjectPaths(context: Context): Set<String> =
