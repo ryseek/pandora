@@ -553,7 +553,8 @@ private class AdbControlBridge(private val manager: AdbPluginManager) : Closeabl
                     message = request.parameters["message"].orEmpty(),
                 )
                 if (result.sent) {
-                    BridgeResponse("200 OK", "{\"ok\":true,\"state\":\"sent\"}")
+                    val state = if (result.suppressed) "suppressed" else "sent"
+                    BridgeResponse("200 OK", "{\"ok\":true,\"state\":\"$state\"}")
                 } else {
                     val status = if (result.error == "message_required") "400 Bad Request" else "403 Forbidden"
                     BridgeResponse(status, "{\"ok\":false,\"error\":\"${result.error}\"}")

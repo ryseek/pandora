@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ComponentCallbacks2
 
 class PandoraApplication : Application() {
+    internal val visibility = AppVisibilityTracker()
     val terminalSessions: TerminalSessionManager by lazy { TerminalSessionManager(this) }
     val chatSessions: CodexChatSessionManager by lazy { CodexChatSessionManager(this) }
     val speechModels: SpeechModelManager by lazy { SpeechModelManager(this) }
@@ -12,6 +13,7 @@ class PandoraApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        registerActivityLifecycleCallbacks(visibility)
         onDeviceSpeech.prewarmSelectedModels()
         // The loopback bridge also serves agent notifications, so it remains
         // available even when the optional ADB phone-control plugin is disabled.
@@ -30,6 +32,7 @@ class PandoraApplication : Application() {
     }
 
     override fun onTerminate() {
+        unregisterActivityLifecycleCallbacks(visibility)
         onDeviceSpeech.releaseWarmModels()
         chatSessions.stopAll()
         terminalSessions.stopAll()

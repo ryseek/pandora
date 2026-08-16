@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger
 internal data class AgentNotificationResult(
     val sent: Boolean,
     val error: String? = null,
+    val suppressed: Boolean = false,
 )
 
 /** Posts user-visible completion and attention updates requested by the local agent. */
@@ -39,6 +40,9 @@ internal class AgentNotificationController(context: Context) {
         if (cleanMessage.isEmpty()) return AgentNotificationResult(false, "message_required")
         if (!AppSettings.agentNotificationsEnabled(appContext)) {
             return AgentNotificationResult(false, "notifications_disabled")
+        }
+        if ((appContext as? PandoraApplication)?.visibility?.isForeground == true) {
+            return AgentNotificationResult(sent = true, suppressed = true)
         }
         if (!notificationsAllowed()) return AgentNotificationResult(false, "notifications_disabled")
 
