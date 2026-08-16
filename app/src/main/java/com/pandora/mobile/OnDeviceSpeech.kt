@@ -85,6 +85,10 @@ internal fun enqueueAudioChunk(
     return if (queue.offer(chunk)) discardedSamples else discardedSamples + chunk.size
 }
 
+internal fun shouldStopSpeechForAudioFocus(change: Int): Boolean =
+    change == AudioManager.AUDIOFOCUS_LOSS ||
+        change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+
 sealed interface SpeechPlaybackState {
     data object Idle : SpeechPlaybackState
     data object Loading : SpeechPlaybackState
@@ -556,7 +560,7 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                     .setAudioAttributes(speechAudioAttributes())
                     .setOnAudioFocusChangeListener(
                         { change ->
-                            if (change < 0) stopSpeaking()
+                            if (shouldStopSpeechForAudioFocus(change)) stopSpeaking()
                         },
                         Handler(Looper.getMainLooper()),
                     )
@@ -570,7 +574,6 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                     if (operation != playbackGeneration.get()) return@launch
                     track = audioTrack
                     audioTrack.play()
-                    _playback.value = SpeechPlaybackState.Speaking
                 }
                 val audioQueue = ArrayBlockingQueue<FloatArray>(TTS_QUEUE_CAPACITY)
                 val generationFinished = AtomicBoolean(false)
@@ -606,6 +609,11 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                 ) {
                     val samples = audioQueue.poll(50, TimeUnit.MILLISECONDS) ?: continue
                     if (audioTrack.playbackHeadPosition == 0) {
+                        synchronized(playbackLock) {
+                            if (!stopPlayback && operation == playbackGeneration.get()) {
+                                _playback.value = SpeechPlaybackState.Speaking
+                            }
+                        }
                         Log.i(TAG, "TTS first write after ${elapsedMillis(requestStartedNanos)} ms")
                     }
                     val written = audioTrack.write(
