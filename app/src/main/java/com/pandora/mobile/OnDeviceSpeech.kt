@@ -147,7 +147,11 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                         synchronized(playbackOperationLock) {
                             playbackModelInUse.set(true)
                             try {
-                                cachedTts(model).generate("Ready.", sid = 0, speed = TTS_SPEED)
+                                cachedTts(model).generate(
+                                    "Ready.",
+                                    sid = 0,
+                                    speed = AppSettings.voiceOverSpeed(appContext),
+                                )
                             } finally {
                                 playbackModelInUse.set(false)
                             }
@@ -538,6 +542,7 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
             return
         }
         val operation = playbackGeneration.incrementAndGet()
+        val voiceOverSpeed = AppSettings.voiceOverSpeed(appContext)
         stopPlayback = false
         _playback.value = SpeechPlaybackState.Loading
         scope.launch {
@@ -584,7 +589,11 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                         for ((index, chunk) in lowLatencySpeechChunks(cleanText).withIndex()) {
                             if (stopPlayback || operation != playbackGeneration.get()) break
                             val chunkStartedNanos = SystemClock.elapsedRealtimeNanos()
-                            val samples = activeTts.generate(chunk, sid = 0, speed = TTS_SPEED).samples
+                            val samples = activeTts.generate(
+                                chunk,
+                                sid = 0,
+                                speed = voiceOverSpeed,
+                            ).samples
                             Log.i(
                                 TAG,
                                 "TTS chunk ${index + 1}: ${chunk.length} chars, " +
@@ -917,7 +926,6 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
         const val AUDIO_CHUNK_SAMPLES = SAMPLE_RATE / 10
         const val AUDIO_QUEUE_CAPACITY = 20
         const val MAX_DICTATION_SAMPLES = SAMPLE_RATE * 120L
-        const val TTS_SPEED = 1.25f
         const val TTS_QUEUE_CAPACITY = 3
         const val TTS_THREADS = 2
         const val DIAGNOSTICS_INTERVAL_NANOS = 250_000_000L

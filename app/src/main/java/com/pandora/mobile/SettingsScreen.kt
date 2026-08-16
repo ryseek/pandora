@@ -607,6 +607,7 @@ fun VoiceSettingsScreen(onBack: () -> Unit) {
     var dictationProcessor by remember { mutableStateOf(AppSettings.dictationProcessor(context)) }
     var refineWithWhisper by remember { mutableStateOf(AppSettings.refineDictationWithWhisper(context)) }
     var selectedTts by remember { mutableStateOf(AppSettings.textToSpeechModel(context)) }
+    var voiceOverSpeed by remember { mutableFloatStateOf(AppSettings.voiceOverSpeed(context)) }
     var autoSpeak by remember { mutableStateOf(AppSettings.speakAssistantResponses(context)) }
 
     fun deleteSpeechModel(model: SpeechModel) {
@@ -793,6 +794,45 @@ fun VoiceSettingsScreen(onBack: () -> Unit) {
                 )
                 Spacer(Modifier.height(10.dp))
             }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                    Text("Voice-over speed", color = SettingsInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(3.dp))
+                    Text("Applies to read-aloud and Voice Mode.", color = SettingsMuted, fontSize = 12.sp)
+                }
+                Text(
+                    formatVoiceOverSpeed(voiceOverSpeed),
+                    color = SettingsInk,
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+            Slider(
+                value = voiceOverSpeed,
+                onValueChange = { voiceOverSpeed = normalizeVoiceOverSpeed(it) },
+                onValueChangeFinished = { AppSettings.setVoiceOverSpeed(context, voiceOverSpeed) },
+                valueRange = AppSettings.MIN_VOICE_OVER_SPEED..AppSettings.MAX_VOICE_OVER_SPEED,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { stateDescription = formatVoiceOverSpeed(voiceOverSpeed) },
+                colors = SliderDefaults.colors(
+                    thumbColor = SettingsAccent,
+                    activeTrackColor = SettingsAccent,
+                    inactiveTrackColor = SettingsLine,
+                ),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("0.5×", color = SettingsMuted, fontSize = 11.sp)
+                Text("2×", color = SettingsMuted, fontSize = 11.sp)
+            }
+            Spacer(Modifier.height(14.dp))
             Row(
                 Modifier.fillMaxWidth().padding(top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -814,6 +854,11 @@ fun VoiceSettingsScreen(onBack: () -> Unit) {
         }
     }
 }
+
+private fun formatVoiceOverSpeed(speed: Float): String =
+    String.format(Locale.US, "%.2f", normalizeVoiceOverSpeed(speed))
+        .trimEnd('0')
+        .trimEnd('.') + "×"
 
 @Composable
 private fun ThemeChoice(

@@ -1,11 +1,20 @@
 package com.pandora.mobile
 
 import android.content.Context
+import kotlin.math.roundToInt
+
+internal fun normalizeVoiceOverSpeed(speed: Float): Float =
+    ((speed / AppSettings.VOICE_OVER_SPEED_STEP).roundToInt() * AppSettings.VOICE_OVER_SPEED_STEP)
+        .coerceIn(AppSettings.MIN_VOICE_OVER_SPEED, AppSettings.MAX_VOICE_OVER_SPEED)
 
 object AppSettings {
     const val MIN_TERMINAL_FONT_SIZE = 9f
     const val MAX_TERMINAL_FONT_SIZE = 22f
     const val DEFAULT_TERMINAL_FONT_SIZE = 13f
+    const val MIN_VOICE_OVER_SPEED = 0.5f
+    const val MAX_VOICE_OVER_SPEED = 2f
+    const val DEFAULT_VOICE_OVER_SPEED = 1.25f
+    const val VOICE_OVER_SPEED_STEP = 0.05f
 
     private const val PREFERENCES = "pandora_settings"
     private const val TERMINAL_FONT_SIZE = "terminal_font_size"
@@ -14,6 +23,7 @@ object AppSettings {
     private const val DICTATION_PROCESSOR = "dictation_processor"
     private const val REFINE_DICTATION_WITH_WHISPER = "refine_dictation_with_whisper"
     private const val TEXT_TO_SPEECH_MODEL = "text_to_speech_model"
+    private const val VOICE_OVER_SPEED = "voice_over_speed"
     private const val SPEAK_ASSISTANT_RESPONSES = "speak_assistant_responses"
     private const val ONBOARDING_COMPLETED = "onboarding_completed"
     private const val EMPTY_PROJECTS_PROMPT_DISMISSED = "empty_projects_prompt_dismissed"
@@ -94,6 +104,16 @@ object AppSettings {
     fun setTextToSpeechModel(context: Context, modelId: String) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit().putString(TEXT_TO_SPEECH_MODEL, modelId).apply()
+    }
+
+    fun voiceOverSpeed(context: Context): Float = normalizeVoiceOverSpeed(
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getFloat(VOICE_OVER_SPEED, DEFAULT_VOICE_OVER_SPEED),
+    )
+
+    fun setVoiceOverSpeed(context: Context, speed: Float) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putFloat(VOICE_OVER_SPEED, normalizeVoiceOverSpeed(speed)).apply()
     }
 
     fun speakAssistantResponses(context: Context): Boolean =
