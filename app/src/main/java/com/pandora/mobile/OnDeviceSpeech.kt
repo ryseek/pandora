@@ -13,6 +13,8 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
@@ -134,6 +136,20 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
     fun prewarmSelectedModels() {
         scope.launch {
             val processor = AppSettings.dictationProcessor(appContext)
+            selectedModel(SpeechModelKind.TEXT_TO_SPEECH)
+                ?.takeIf(models::isInstalled)
+                ?.let { model ->
+                    runCatching {
+                        synchronized(playbackOperationLock) {
+                            playbackModelInUse.set(true)
+                            try {
+                                cachedTts(model).generate("Ready.", sid = 0, speed = TTS_SPEED)
+                            } finally {
+                                playbackModelInUse.set(false)
+                            }
+                        }
+                    }
+                }
             selectedModel(SpeechModelKind.SPEECH_TO_TEXT)
                 ?.takeIf(models::isInstalled)
                 ?.let { model ->
@@ -150,20 +166,6 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                     AppSettings.refineDictationWithWhisper(appContext) && models.isInstalled(it)
                 }
                 ?.let { runCatching { cachedOfflineRecognizer(it, processor) } }
-            selectedModel(SpeechModelKind.TEXT_TO_SPEECH)
-                ?.takeIf(models::isInstalled)
-                ?.let { model ->
-                    runCatching {
-                        synchronized(playbackOperationLock) {
-                            playbackModelInUse.set(true)
-                            try {
-                                cachedTts(model).generate("Ready.", sid = 0, speed = TTS_SPEED)
-                            } finally {
-                                playbackModelInUse.set(false)
-                            }
-                        }
-                    }
-                }
         }
     }
 
@@ -515,6 +517,7 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
     }
 
     fun speak(text: String) {
+        val requestStartedNanos = SystemClock.elapsedRealtimeNanos()
         val cleanText = text
             .replace(Regex("```[\\s\\S]*?```"), " Code block omitted. ")
             .replace(Regex("\\[([^]]+)]\\([^)]+\\)")) { match -> match.groupValues[1] }
@@ -541,7 +544,12 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
             var focusRequest: AudioFocusRequest? = null
             val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             try {
+                val modelStartedNanos = SystemClock.elapsedRealtimeNanos()
                 tts = cachedTts(model)
+                Log.i(
+                    TAG,
+                    "TTS model ready in ${elapsedMillis(modelStartedNanos)} ms (${model.id})",
+                )
                 if (operation != playbackGeneration.get()) return@launch
                 focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                     .setAudioAttributes(speechAudioAttributes())
@@ -569,9 +577,15 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                 val activeTts = checkNotNull(tts)
                 generationThread = thread(name = "pandora-tts-generation", isDaemon = true) {
                     try {
-                        for (chunk in speechChunks(cleanText)) {
+                        for ((index, chunk) in lowLatencySpeechChunks(cleanText).withIndex()) {
                             if (stopPlayback || operation != playbackGeneration.get()) break
+                            val chunkStartedNanos = SystemClock.elapsedRealtimeNanos()
                             val samples = activeTts.generate(chunk, sid = 0, speed = TTS_SPEED).samples
+                            Log.i(
+                                TAG,
+                                "TTS chunk ${index + 1}: ${chunk.length} chars, " +
+                                    "${samples.size} samples, ${elapsedMillis(chunkStartedNanos)} ms",
+                            )
                             while (
                                 !stopPlayback &&
                                 operation == playbackGeneration.get() &&
@@ -590,6 +604,9 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                     (!generationFinished.get() || audioQueue.isNotEmpty())
                 ) {
                     val samples = audioQueue.poll(50, TimeUnit.MILLISECONDS) ?: continue
+                    if (audioTrack.playbackHeadPosition == 0) {
+                        Log.i(TAG, "TTS first write after ${elapsedMillis(requestStartedNanos)} ms")
+                    }
                     val written = audioTrack.write(
                         samples,
                         0,
@@ -876,30 +893,6 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
         .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
         .build()
 
-    private fun speechChunks(text: String, maxLength: Int = 220): List<String> {
-        val sentences = text.split(Regex("(?<=[.!?])\\s+"))
-        val chunks = mutableListOf<String>()
-        var current = StringBuilder()
-        fun flush() {
-            if (current.isNotEmpty()) chunks += current.toString().trim()
-            current = StringBuilder()
-        }
-        sentences.forEach { sentence ->
-            if (sentence.length > maxLength) {
-                flush()
-                sentence.chunked(maxLength).forEach(chunks::add)
-            } else if (current.length + sentence.length + 1 > maxLength) {
-                flush()
-                current.append(sentence)
-            } else {
-                if (current.isNotEmpty()) current.append(' ')
-                current.append(sentence)
-            }
-        }
-        flush()
-        return chunks
-    }
-
     private fun joinText(first: String, second: String): String = when {
         first.isBlank() -> second
         second.isBlank() -> first
@@ -908,13 +901,41 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
     }
 
     private companion object {
+        const val TAG = "OnDeviceSpeech"
         const val SAMPLE_RATE = 16_000
         const val AUDIO_CHUNK_SAMPLES = SAMPLE_RATE / 10
         const val AUDIO_QUEUE_CAPACITY = 20
         const val MAX_DICTATION_SAMPLES = SAMPLE_RATE * 120L
         const val TTS_SPEED = 1.25f
         const val TTS_QUEUE_CAPACITY = 3
-        const val TTS_THREADS = 4
+        const val TTS_THREADS = 2
         const val DIAGNOSTICS_INTERVAL_NANOS = 250_000_000L
     }
 }
+
+internal fun lowLatencySpeechChunks(
+    text: String,
+    targetLengths: IntArray = intArrayOf(44, 80, 128, 220),
+): List<String> {
+    val words = text.trim().split(Regex("\\s+")).filter(String::isNotBlank)
+    if (words.isEmpty()) return emptyList()
+
+    val chunks = mutableListOf<String>()
+    var current = StringBuilder()
+    words.forEach { word ->
+        val target = targetLengths[chunks.size.coerceAtMost(targetLengths.lastIndex)]
+        val proposedLength = current.length + if (current.isEmpty()) word.length else word.length + 1
+        if (current.isNotEmpty() && proposedLength > target) {
+            chunks += current.toString()
+            current = StringBuilder(word)
+        } else {
+            if (current.isNotEmpty()) current.append(' ')
+            current.append(word)
+        }
+    }
+    if (current.isNotEmpty()) chunks += current.toString()
+    return chunks
+}
+
+private fun elapsedMillis(startedNanos: Long): Long =
+    (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1_000_000L

@@ -43,4 +43,28 @@ class SpeechModelsTest {
         assertEquals("zipformer-en-kroko", SpeechModels.find(SpeechModels.DEFAULT_STT_ID)?.engine)
         assertTrue(SpeechModels.find(SpeechModels.WHISPER_TINY_ID)?.retainOnlyRequiredFiles == true)
     }
+
+    @Test
+    fun speechChunksGrowAfterACompactLeadingPhrase() {
+        val chunks = lowLatencySpeechChunks(
+            "One two three four five six seven eight nine ten eleven twelve thirteen fourteen " +
+                "fifteen sixteen seventeen eighteen nineteen twenty.",
+            targetLengths = intArrayOf(20, 40, 80),
+        )
+
+        assertEquals(
+            listOf(
+                "One two three four",
+                "five six seven eight nine ten eleven",
+                "twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty.",
+            ),
+            chunks,
+        )
+    }
+
+    @Test
+    fun speechChunksPreserveAllWordsWithoutSplittingLongTokens() {
+        val text = "Okay supercalifragilisticexpialidocious now"
+        assertEquals(text, lowLatencySpeechChunks(text, intArrayOf(8)).joinToString(" "))
+    }
 }
