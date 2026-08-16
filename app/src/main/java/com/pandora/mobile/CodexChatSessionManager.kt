@@ -4,6 +4,8 @@ import android.content.Context
 import com.pandora.mobile.linux.CodexChatSession
 import com.pandora.mobile.linux.CodexChatState
 import com.pandora.mobile.linux.RootfsInstaller
+import com.pandora.mobile.linux.generalChatWorkingDirectory
+import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +27,7 @@ class CodexChatSessionManager(private val context: Context) {
     private var staleProcessesCleaned = false
 
     @Synchronized
-    fun create(threadId: String? = null, cwd: String = "/root"): CodexChatSession {
+    fun create(threadId: String? = null, cwd: String? = null): CodexChatSession {
         if (threadId != null) {
             _sessions.value.firstOrNull {
                 it.activeThreadId == threadId &&
@@ -44,11 +46,23 @@ class CodexChatSessionManager(private val context: Context) {
         }
 
         cleanStaleProcessesOnce()
+        val sessionId = UUID.randomUUID().toString()
+        val workingDirectory = cwd ?: if (threadId == null) {
+            generalChatWorkingDirectory(sessionId).also { path ->
+                val relativePath = path.removePrefix("/root/")
+                val directory = File(RootfsInstaller(appContext).workspace, relativePath)
+                check(directory.isDirectory || directory.mkdirs()) {
+                    "Could not create chat workspace"
+                }
+            }
+        } else {
+            "/root"
+        }
         val session = CodexChatSession(
             context = appContext,
-            id = UUID.randomUUID().toString(),
+            id = sessionId,
             resumeThreadId = threadId,
-            cwd = cwd,
+            cwd = workingDirectory,
         )
         _sessions.value = _sessions.value + session
         observe(session)

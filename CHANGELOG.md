@@ -6,15 +6,24 @@ All notable changes to Pandora are documented here. The format follows
 
 ## Unreleased
 
+## 0.1.4 - 2026-08-16
+
 ### Added
 
 - Added one-tap general and project chat creation from Home, plus a dismissible first-project prompt.
 - Added a discoverable chat slash-command palette with `/compact`, `/review`, `/status`, `/model`, and `/new` support.
+- Added a responsive two-pane workspace for tablets and foldables, with the chat list beside the active conversation.
 
 ### Changed
 
+- Give every new general chat an isolated `/root/chats/<uuid>` workspace while project chats continue to share their project directory.
+- Place newly created and cloned projects under `/root/projects` while preserving registered legacy project paths.
 - Clarified project expansion with open and closed folder states and aligned contextual actions with the existing control system.
 - Simplified chat-list secondary rows to show status and only meaningful progress or error details.
+
+### Fixed
+
+- Keep inactive chat rows visually quiet instead of highlighting them when no chat session is selected.
 
 ## 0.1.3 - 2026-08-15
 

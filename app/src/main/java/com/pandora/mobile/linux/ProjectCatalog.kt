@@ -5,6 +5,8 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
+const val PROJECT_WORKSPACE_ROOT = "/root/projects"
+
 data class PandoraProject(
     val path: String,
     val customName: String? = null,
@@ -19,6 +21,7 @@ data class PandoraProject(
 class ProjectCatalog(context: Context) {
     private val installer = RootfsInstaller(context.applicationContext)
     private val registry = File(installer.workspace, ".pandora/projects.json")
+    private val projectsDirectory = File(installer.workspace, "projects")
 
     fun readRegistered(): List<PandoraProject> = synchronized(LOCK) {
         runCatching {
@@ -42,13 +45,13 @@ class ProjectCatalog(context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    /** Shows real, top-level Linux workspace folders without exposing Pandora's hidden state. */
+    /** Shows real project folders without exposing Pandora's internal workspace state. */
     fun discoverFolders(): List<PandoraProject> {
-        installer.workspace.mkdirs()
-        return installer.workspace.listFiles().orEmpty()
+        projectsDirectory.mkdirs()
+        return projectsDirectory.listFiles().orEmpty()
             .asSequence()
             .filter { it.isDirectory && !it.name.startsWith('.') }
-            .map { PandoraProject("/root/${it.name}") }
+            .map { PandoraProject("$PROJECT_WORKSPACE_ROOT/${it.name}") }
             .sortedBy { it.name.lowercase() }
             .toList()
     }
@@ -85,10 +88,11 @@ class ProjectCatalog(context: Context) {
 
     fun createFolder(name: String): PandoraProject {
         val folderName = validateFolderName(name)
-        val directory = File(installer.workspace, folderName)
+        projectsDirectory.mkdirs()
+        val directory = File(projectsDirectory, folderName)
         require(!directory.exists()) { "A folder named $folderName already exists" }
         check(directory.mkdirs()) { "Could not create the folder" }
-        return register("/root/$folderName")
+        return register("$PROJECT_WORKSPACE_ROOT/$folderName")
     }
 
     fun cloneRepository(url: String): PandoraProject {
@@ -100,12 +104,19 @@ class ProjectCatalog(context: Context) {
             .substringAfterLast(':')
             .removeSuffix(".git")
             .let(::validateFolderName)
-        val destination = File(installer.workspace, folderName)
+        projectsDirectory.mkdirs()
+        val destination = File(projectsDirectory, folderName)
         require(!destination.exists()) { "A folder named $folderName already exists" }
 
         installer.installIfNeeded { }
         val process = installer.startContainerProcess(
-            installer.containerCommand("/usr/bin/git", "clone", "--", repositoryUrl, "/root/$folderName"),
+            installer.containerCommand(
+                "/usr/bin/git",
+                "clone",
+                "--",
+                repositoryUrl,
+                "$PROJECT_WORKSPACE_ROOT/$folderName",
+            ),
             mergeError = true,
         )
         val output = process.inputStream.bufferedReader().use { it.readText() }
@@ -114,7 +125,7 @@ class ProjectCatalog(context: Context) {
             destination.deleteRecursively()
             error(output.lineSequence().lastOrNull { it.isNotBlank() } ?: "Could not clone repository")
         }
-        return register("/root/$folderName")
+        return register("$PROJECT_WORKSPACE_ROOT/$folderName")
     }
 
     private fun write(projects: List<PandoraProject>) {
@@ -144,7 +155,10 @@ class ProjectCatalog(context: Context) {
     }
 
     private fun isProjectPath(path: String): Boolean =
-        path.startsWith("/root/") && path.length > "/root/".length && "/../" !in "$path/"
+        path.startsWith("/root/") &&
+            path.length > "/root/".length &&
+            "/../" !in "$path/" &&
+            !isReservedChatWorkspacePath(path)
 
     private companion object {
         val LOCK = Any()

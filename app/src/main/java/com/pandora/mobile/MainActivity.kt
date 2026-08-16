@@ -23,11 +23,13 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -107,6 +109,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -128,6 +131,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpOffset
@@ -146,6 +150,8 @@ import com.pandora.mobile.linux.ChatRole
 import com.pandora.mobile.linux.SystemMessageTone
 import com.pandora.mobile.linux.CodexChatSession
 import com.pandora.mobile.linux.CodexChatState
+import com.pandora.mobile.linux.isGeneralChatWorkingDirectory
+import com.pandora.mobile.linux.isReservedChatWorkspacePath
 import com.pandora.mobile.linux.CodexThreadCatalog
 import com.pandora.mobile.linux.CodexThreadSummary
 import com.pandora.mobile.linux.CodexUsageReader
@@ -201,23 +207,119 @@ private fun PandoraApp() {
     val sessionRevision by sessionManager.revision.collectAsState()
     val chatSessions by chatManager.sessions.collectAsState()
     val adbState by context.adbPlugin.state.collectAsState()
-    var screen by remember {
+    var screen by rememberSaveable {
         mutableStateOf(
             if (AppSettings.onboardingCompleted(context)) Screen.Home else Screen.Onboarding,
         )
     }
-    var settingsReturnScreen by remember { mutableStateOf(Screen.Home) }
-    var selectedSessionId by remember { mutableStateOf<String?>(null) }
-    var selectedChatSessionId by remember { mutableStateOf<String?>(null) }
+    var settingsReturnScreen by rememberSaveable { mutableStateOf(Screen.Home) }
+    var selectedSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedChatSessionId by rememberSaveable { mutableStateOf<String?>(null) }
     var themePreference by remember { mutableStateOf(AppSettings.theme(context)) }
     PandoraTheme(themePreference) {
         Surface(color = Paper, modifier = Modifier.fillMaxSize()) {
-            AnimatedContent(
-                targetState = screen,
-                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
-                label = "screen"
-            ) { target ->
-                when (target) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val expandedWorkspace = maxWidth >= 840.dp
+                val selectedChat = chatManager.find(selectedChatSessionId)
+                val homePane: @Composable (Modifier, Boolean) -> Unit = { modifier, sidebar ->
+                    HomeScreen(
+                        sessions = sessions,
+                        revision = sessionRevision,
+                        chatSessions = chatSessions,
+                        selectedChatSessionId = selectedChatSessionId,
+                        sidebarMode = sidebar,
+                        modifier = modifier,
+                        onNewChat = { cwd ->
+                            selectedChatSessionId = chatManager.create(cwd = cwd).id
+                            if (!expandedWorkspace) screen = Screen.Chat
+                        },
+                        onOpenChat = { threadId, cwd ->
+                            selectedChatSessionId = chatManager.create(threadId, cwd).id
+                            if (!expandedWorkspace) screen = Screen.Chat
+                        },
+                        onStopChat = chatManager::stopThread,
+                        onNewTerminal = {
+                            selectedSessionId = sessionManager.create().id
+                            screen = Screen.Container
+                        },
+                        onOpenTerminal = {
+                            selectedSessionId = it.id
+                            screen = Screen.Container
+                        },
+                        onRestartTerminal = { session ->
+                            sessionManager.restart(session.id)?.let { restarted ->
+                                selectedSessionId = restarted.id
+                                screen = Screen.Container
+                            }
+                        },
+                        onRenameTerminal = { session, title -> sessionManager.rename(session.id, title) },
+                        onDeleteTerminal = { session -> sessionManager.delete(session.id) },
+                        onRenamePersistentTerminal = { name, title ->
+                            val session = sessionManager.attach(name)
+                            sessionManager.rename(session.id, title)
+                        },
+                        onDeletePersistentTerminal = sessionManager::deletePersistent,
+                        onOpenPersistentTerminal = { name ->
+                            selectedSessionId = sessionManager.attach(name).id
+                            screen = Screen.Container
+                        },
+                        onSettings = {
+                            settingsReturnScreen = screen
+                            screen = Screen.Settings
+                        },
+                        onCodexLogin = {
+                            selectedSessionId = sessionManager.create("codex login").id
+                            screen = Screen.Container
+                        },
+                    )
+                }
+                val chatPane: @Composable (CodexChatSession, Boolean) -> Unit = { chat, showBackButton ->
+                    androidx.compose.runtime.key(chat.id) {
+                        ChatScreen(
+                            session = chat,
+                            showBackButton = showBackButton,
+                            onBack = {
+                                selectedChatSessionId = null
+                                screen = Screen.Home
+                            },
+                            onNewChat = {
+                                val cwd = chat.workingDirectory.takeUnless {
+                                    it == "/root" || isGeneralChatWorkingDirectory(it)
+                                }
+                                selectedChatSessionId = chatManager.create(cwd = cwd).id
+                            },
+                            onSettings = {
+                                settingsReturnScreen = screen
+                                screen = Screen.Settings
+                            },
+                        )
+                    }
+                }
+                val twoPaneWorkspace: @Composable () -> Unit = {
+                    Row(Modifier.fillMaxSize()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.weight(0.28f).fillMaxSize(),
+                        ) {
+                            homePane(Modifier.fillMaxSize(), true)
+                        }
+                        Box(Modifier.fillMaxHeight().width(1.dp).background(Line))
+                        Box(Modifier.weight(0.72f).fillMaxSize()) {
+                            if (selectedChat == null) {
+                                EmptyWorkspaceDetail()
+                            } else {
+                                chatPane(selectedChat, false)
+                            }
+                        }
+                    }
+                }
+
+                AnimatedContent(
+                    targetState = screen,
+                    transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+                    label = "screen"
+                ) { target ->
+                    when (target) {
                     Screen.Onboarding -> OnboardingScreen(
                         onSignIn = {
                             ModelProviderSettings.useCodex(context)
@@ -244,70 +346,18 @@ private fun PandoraApp() {
                             screen = Screen.Home
                         },
                     )
-                    Screen.Home -> HomeScreen(
-                        sessions = sessions,
-                        revision = sessionRevision,
-                        chatSessions = chatSessions,
-                        onNewChat = { cwd ->
-                            selectedChatSessionId = chatManager.create(cwd = cwd ?: "/root").id
-                            screen = Screen.Chat
-                        },
-                        onOpenChat = { threadId, cwd ->
-                            selectedChatSessionId = chatManager.create(threadId, cwd).id
-                            screen = Screen.Chat
-                        },
-                        onStopChat = chatManager::stopThread,
-                        onNewTerminal = {
-                            selectedSessionId = sessionManager.create().id
-                            screen = Screen.Container
-                        },
-                        onOpenTerminal = {
-                            selectedSessionId = it.id
-                            screen = Screen.Container
-                        },
-                        onRestartTerminal = {
-                            val restarted = sessionManager.restart(it.id) ?: return@HomeScreen
-                            selectedSessionId = restarted.id
-                            screen = Screen.Container
-                        },
-                        onRenameTerminal = { session, title -> sessionManager.rename(session.id, title) },
-                        onDeleteTerminal = { session -> sessionManager.delete(session.id) },
-                        onRenamePersistentTerminal = { name, title ->
-                            val session = sessionManager.attach(name)
-                            sessionManager.rename(session.id, title)
-                        },
-                        onDeletePersistentTerminal = sessionManager::deletePersistent,
-                        onOpenPersistentTerminal = { name ->
-                            selectedSessionId = sessionManager.attach(name).id
-                            screen = Screen.Container
-                        },
-                        onSettings = {
-                            settingsReturnScreen = Screen.Home
-                            screen = Screen.Settings
-                        },
-                        onCodexLogin = {
-                            selectedSessionId = sessionManager.create("codex login").id
-                            screen = Screen.Container
-                        },
-                    )
+                    Screen.Home -> if (expandedWorkspace) {
+                        twoPaneWorkspace()
+                    } else {
+                        homePane(Modifier.fillMaxSize(), false)
+                    }
                     Screen.Chat -> {
-                        val chat = chatManager.find(selectedChatSessionId)
-                        if (chat == null) {
+                        if (expandedWorkspace) {
+                            twoPaneWorkspace()
+                        } else if (selectedChat == null) {
                             LaunchedEffect(Unit) { screen = Screen.Home }
                         } else {
-                            androidx.compose.runtime.key(chat.id) {
-                                ChatScreen(
-                                    session = chat,
-                                    onBack = { screen = Screen.Home },
-                                    onNewChat = {
-                                        selectedChatSessionId = chatManager.create(cwd = chat.workingDirectory).id
-                                    },
-                                    onSettings = {
-                                        settingsReturnScreen = Screen.Chat
-                                        screen = Screen.Settings
-                                    },
-                                )
-                            }
+                            chatPane(selectedChat, true)
                         }
                     }
                     Screen.Container -> {
@@ -398,6 +448,7 @@ private fun PandoraApp() {
                         onRetry = context.adbPlugin::retry,
                     )
                     Screen.Archive -> ArchiveScreen(onBack = { screen = Screen.Settings })
+                    }
                 }
             }
         }
@@ -1078,6 +1129,9 @@ private fun HomeScreen(
     sessions: List<ManagedTerminalSession>,
     @Suppress("UNUSED_PARAMETER") revision: Long,
     chatSessions: List<CodexChatSession>,
+    selectedChatSessionId: String? = null,
+    sidebarMode: Boolean = false,
+    modifier: Modifier = Modifier,
     onNewChat: (String?) -> Unit,
     onOpenChat: (String, String) -> Unit,
     onStopChat: (String) -> Unit,
@@ -1156,7 +1210,10 @@ private fun HomeScreen(
     val projects = remember(activeChats, registeredProjects, archive) {
         val visibleRegistered = registeredProjects.filterNot { it.path in archive.projectPaths }
         val registeredByPath = visibleRegistered.associateBy { it.path }
-        (visibleRegistered.map { it.path } + activeChats.map { it.cwd }.filter { it != "/root" })
+        (
+            visibleRegistered.map { it.path } +
+                activeChats.map { it.cwd }.filter { it != "/root" && !isReservedChatWorkspacePath(it) }
+        )
             .distinct()
             .filter { it.startsWith("/root/") }
             .map { registeredByPath[it] ?: PandoraProject(it) }
@@ -1179,37 +1236,72 @@ private fun HomeScreen(
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
+        modifier = modifier
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(horizontal = 18.dp, vertical = 14.dp)
+            .padding(horizontal = if (sidebarMode) 14.dp else 18.dp, vertical = 14.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .background(SoftSurface, CircleShape)
-                    .clickable(onClick = onSettings),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Rounded.Settings, contentDescription = "Settings", tint = Ink, modifier = Modifier.size(20.dp))
+        if (sidebarMode) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Pandora",
+                    color = Ink,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onSettings, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Rounded.Settings, contentDescription = "Settings", tint = Muted, modifier = Modifier.size(20.dp))
+                }
+                IconButton(onClick = onNewTerminal, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Rounded.Terminal, contentDescription = "New terminal", tint = Ink, modifier = Modifier.size(20.dp))
+                }
             }
-            Spacer(Modifier.weight(1f))
-            Text("Pandora", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.weight(1f))
-            Box(
+            Row(
                 modifier = Modifier
-                    .size(40.dp)
-                    .background(Ink, CircleShape)
-                    .clickable(onClick = onNewTerminal),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .background(Ink, RoundedCornerShape(14.dp))
+                    .clickable(onClickLabel = "Start a new general chat", onClick = { onNewChat(null) })
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Rounded.Terminal, contentDescription = "New terminal", tint = Paper, modifier = Modifier.size(20.dp))
+                Icon(
+                    Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text("New chat", color = Paper, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
+            Spacer(Modifier.height(16.dp))
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(SoftSurface, CircleShape)
+                        .clickable(onClick = onSettings),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Settings, contentDescription = "Settings", tint = Ink, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.weight(1f))
+                Text("Pandora", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(Ink, CircleShape)
+                        .clickable(onClick = onNewTerminal),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Terminal, contentDescription = "New terminal", tint = Paper, modifier = Modifier.size(20.dp))
+                }
+            }
+            Spacer(Modifier.height(18.dp))
         }
-
-        Spacer(Modifier.height(18.dp))
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -1225,6 +1317,7 @@ private fun HomeScreen(
                 item("projects-empty") {
                     EmptyProjectsRow(
                         loading = catalogLoading,
+                        compact = sidebarMode,
                         onAddProject = { addProjectStep = AddProjectStep.Menu },
                         onDismiss = {
                             emptyProjectsPromptDismissed = true
@@ -1267,6 +1360,8 @@ private fun HomeScreen(
                         WorkspaceEntryRow(
                             entry = entry,
                             chatSessions = chatSessions,
+                            selectedChatSessionId = selectedChatSessionId,
+                            dense = sidebarMode,
                             nested = true,
                             onOpenChat = onOpenChat,
                             onStopChat = onStopChat,
@@ -1299,6 +1394,8 @@ private fun HomeScreen(
                     WorkspaceEntryRow(
                         entry = entry,
                         chatSessions = chatSessions,
+                        selectedChatSessionId = selectedChatSessionId,
+                        dense = sidebarMode,
                         onOpenChat = onOpenChat,
                         onStopChat = onStopChat,
                         onOpenTerminal = onOpenTerminal,
@@ -1322,10 +1419,7 @@ private fun HomeScreen(
         }
 
         Spacer(Modifier.height(10.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) {
                 if (customProvider == null) {
                     CodexLimitsFooter(
@@ -1350,22 +1444,24 @@ private fun HomeScreen(
                     }
                 }
             }
-            Spacer(Modifier.width(12.dp))
-            Row(
-                modifier = Modifier
-                    .background(Ink, RoundedCornerShape(24.dp))
-                    .clickable(onClickLabel = "Start a new general chat", onClick = { onNewChat(null) })
-                    .padding(horizontal = 20.dp, vertical = 13.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Rounded.AutoAwesome,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(9.dp))
-                Text("New chat", color = Paper, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            if (!sidebarMode) {
+                Spacer(Modifier.width(12.dp))
+                Row(
+                    modifier = Modifier
+                        .background(Ink, RoundedCornerShape(24.dp))
+                        .clickable(onClickLabel = "Start a new general chat", onClick = { onNewChat(null) })
+                        .padding(horizontal = 20.dp, vertical = 13.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(9.dp))
+                    Text("New chat", color = Paper, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }
@@ -1784,6 +1880,7 @@ private fun ProjectMenuItem(
 @Composable
 private fun EmptyProjectsRow(
     loading: Boolean,
+    compact: Boolean = false,
     onAddProject: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1800,6 +1897,31 @@ private fun EmptyProjectsRow(
                 Text("Opening your workspace…", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 Spacer(Modifier.height(2.dp))
                 Text("Loading projects and recent chats", color = Muted, fontSize = 12.sp)
+            }
+        }
+    } else if (compact) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.background, RoundedCornerShape(14.dp))
+                .clickable(onClickLabel = "Add a project", onClick = onAddProject)
+                .padding(start = 12.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(40.dp).background(AccentSurface, RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Folder, contentDescription = null, tint = Accent, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Add your first project", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
+                Text("Choose or clone a folder", color = Muted, fontSize = 12.sp, maxLines = 1)
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Rounded.Close, contentDescription = "Dismiss", tint = Muted, modifier = Modifier.size(18.dp))
             }
         }
     } else {
@@ -1906,7 +2028,7 @@ private fun AddProjectDialog(
                         ProjectChoiceRow(
                             icon = Icons.Rounded.Folder,
                             title = "Choose folder",
-                            subtitle = "Use an existing folder in /root",
+                            subtitle = "Use an existing folder in /root/projects",
                             onClick = { step = AddProjectStep.ChooseFolder },
                         )
                         ProjectChoiceRow(
@@ -1918,13 +2040,13 @@ private fun AddProjectDialog(
                         ProjectChoiceRow(
                             icon = Icons.AutoMirrored.Rounded.ArrowForward,
                             title = "Clone repository",
-                            subtitle = "Clone a Git repository into /root",
+                            subtitle = "Clone a Git repository into /root/projects",
                             onClick = { step = AddProjectStep.CloneRepository },
                         )
                     }
                     AddProjectStep.ChooseFolder -> {
                         if (folders.isEmpty()) {
-                            Text("No ungrouped folders found in /root.", color = Muted, fontSize = 13.sp)
+                            Text("No ungrouped folders found in /root/projects.", color = Muted, fontSize = 13.sp)
                         } else {
                             folders.forEach { project ->
                                 ProjectChoiceRow(
@@ -2315,6 +2437,8 @@ private fun DeleteChatDialog(
 private fun WorkspaceEntryRow(
     entry: WorkspaceEntry,
     chatSessions: List<CodexChatSession>,
+    selectedChatSessionId: String? = null,
+    dense: Boolean = false,
     nested: Boolean = false,
     onOpenChat: (String, String) -> Unit,
     onStopChat: (String) -> Unit,
@@ -2336,6 +2460,7 @@ private fun WorkspaceEntryRow(
         chatSessions.firstOrNull { it.activeThreadId == chatEntry.chat.id }
     }
     val chatState = chatSession?.state?.collectAsState()?.value
+    val selected = selectedChatSessionId?.let { it == chatSession?.id } == true
     val title = when (entry) {
         is WorkspaceEntry.Chat -> entry.chat.title
         is WorkspaceEntry.TerminalSession -> entry.session.title
@@ -2377,7 +2502,7 @@ private fun WorkspaceEntryRow(
         Modifier
             .fillMaxWidth()
             .background(
-                if (menuExpanded) AccentSurface else Color.Transparent,
+                if (menuExpanded || selected) AccentSurface else Color.Transparent,
                 RoundedCornerShape(14.dp),
             ),
     ) {
@@ -2395,12 +2520,17 @@ private fun WorkspaceEntryRow(
                     onLongClick = { menuExpanded = true },
                     onLongClickLabel = "More actions",
                 )
-                .padding(start = if (nested) 30.dp else 0.dp, top = 11.dp, bottom = 11.dp),
+                .padding(
+                    start = if (nested) 30.dp else 0.dp,
+                    end = if (dense) 6.dp else 10.dp,
+                    top = 11.dp,
+                    bottom = 11.dp,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
         Box(
             Modifier
-                .size(42.dp)
+                .size(if (dense) 38.dp else 42.dp)
                 .background(
                     if (isChat) AccentSurface else MaterialTheme.colorScheme.secondaryContainer,
                     CircleShape,
@@ -2411,12 +2541,46 @@ private fun WorkspaceEntryRow(
                 if (isChat) Icons.Rounded.AutoAwesome else Icons.Rounded.Terminal,
                 contentDescription = null,
                 tint = if (isChat) Accent else MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(19.dp),
+                modifier = Modifier.size(if (dense) 18.dp else 19.dp),
             )
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(if (dense) 10.dp else 12.dp))
+        val stoppedSession = (entry as? WorkspaceEntry.TerminalSession)?.session?.takeIf {
+            it.state.value == PtyTerminalSession.State.STOPPED ||
+                it.state.value == PtyTerminalSession.State.FAILED
+        }
+        val relativeTime = if (
+            stoppedSession == null &&
+            !(entry is WorkspaceEntry.Chat && chatIsActive) &&
+            entry.updatedAtMillis > 0L
+        ) {
+            formatRelativeTime(entry.updatedAtMillis)
+        } else {
+            null
+        }
         Column(Modifier.weight(1f)) {
-            Text(title, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Text(
+                    title,
+                    color = Ink,
+                    fontSize = if (dense) 14.sp else 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                relativeTime?.let { time ->
+                    Spacer(Modifier.width(if (dense) 6.dp else 8.dp))
+                    Text(
+                        time,
+                        color = Muted,
+                        fontSize = if (dense) 10.sp else 11.sp,
+                        maxLines = 1,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.widthIn(min = if (dense) 24.dp else 28.dp),
+                    )
+                }
+            }
             Spacer(Modifier.height(3.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -2429,16 +2593,12 @@ private fun WorkspaceEntryRow(
                 Text(
                     subtitle,
                     color = Muted,
-                    fontSize = 12.sp,
+                    fontSize = if (dense) 11.sp else 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-            val stoppedSession = (entry as? WorkspaceEntry.TerminalSession)?.session?.takeIf {
-                it.state.value == PtyTerminalSession.State.STOPPED ||
-                    it.state.value == PtyTerminalSession.State.FAILED
-            }
             if (entry is WorkspaceEntry.Chat && chatIsActive) {
                 Spacer(Modifier.width(10.dp))
                 IconButton(
@@ -2471,9 +2631,6 @@ private fun WorkspaceEntryRow(
                     Spacer(Modifier.width(4.dp))
                     Text("Start", color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
-            } else if (entry.updatedAtMillis > 0L) {
-                Spacer(Modifier.width(8.dp))
-                Text(formatRelativeTime(entry.updatedAtMillis), color = Muted, fontSize = 11.sp)
             }
         }
         Box(
@@ -2874,11 +3031,45 @@ private fun Header(title: String, detail: String? = null, onBack: () -> Unit, da
 }
 
 @Composable
+private fun EmptyWorkspaceDetail() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier.size(56.dp).background(AccentSurface, RoundedCornerShape(18.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Rounded.AutoAwesome,
+                contentDescription = null,
+                tint = Accent,
+                modifier = Modifier.size(25.dp),
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+        Text("Choose a chat", color = Ink, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Select a conversation from the sidebar, or start a new one.",
+            color = Muted,
+            fontSize = 15.sp,
+        )
+    }
+}
+
+@Composable
 private fun ChatScreen(
     session: CodexChatSession,
     onBack: () -> Unit,
     onNewChat: () -> Unit,
     onSettings: () -> Unit,
+    showBackButton: Boolean = true,
 ) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
@@ -3069,13 +3260,15 @@ private fun ChatScreen(
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                Modifier.size(40.dp).background(SoftSurface, CircleShape).clickable(onClick = onBack),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Ink, modifier = Modifier.size(20.dp))
+            if (showBackButton) {
+                Box(
+                    Modifier.size(40.dp).background(SoftSurface, CircleShape).clickable(onClick = onBack),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Ink, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(12.dp))
             }
-            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("Codex", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 Box {

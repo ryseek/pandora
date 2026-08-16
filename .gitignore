@@ -13,3 +13,4 @@ voice-samples/
 keystore.properties
 *.apk
 *.aab
+EMULATOR_QA.local.md
