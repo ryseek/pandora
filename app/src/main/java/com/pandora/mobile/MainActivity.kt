@@ -71,6 +71,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
@@ -3413,24 +3414,6 @@ private fun ChatScreen(
                     }
                 }
             }
-            Box(
-                Modifier
-                    .size(40.dp)
-                    .background(if (voiceModeEnabled) Accent else SoftSurface, CircleShape)
-                    .clickable(
-                        onClickLabel = if (voiceModeEnabled) "End Voice Mode" else "Start Voice Mode",
-                        onClick = ::toggleVoiceMode,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    if (voiceModeEnabled) Icons.AutoMirrored.Rounded.VolumeUp else Icons.Rounded.MicNone,
-                    contentDescription = if (voiceModeEnabled) "End Voice Mode" else "Start Voice Mode",
-                    tint = if (voiceModeEnabled) MaterialTheme.colorScheme.onPrimary else Accent,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Spacer(Modifier.width(8.dp))
             StatusPill()
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
@@ -3633,7 +3616,7 @@ private fun ChatScreen(
                             beginDictation()
                         }
                     },
-                    enabled = ready && dictation !is DictationState.Transcribing,
+                    enabled = !voiceModeEnabled && ready && dictation !is DictationState.Transcribing,
                     modifier = Modifier.size(48.dp),
                 ) {
                     if (dictation is DictationState.Transcribing) {
@@ -3642,10 +3625,32 @@ private fun ChatScreen(
                         Icon(
                             if (dictation is DictationState.Loading || dictation is DictationState.Listening) Icons.Rounded.Stop else Icons.Rounded.MicNone,
                             contentDescription = if (dictation is DictationState.Loading || dictation is DictationState.Listening) "Stop dictation" else "Start dictation",
-                            tint = if (dictation is DictationState.Loading || dictation is DictationState.Listening) MaterialTheme.colorScheme.error else Accent,
+                            tint = when {
+                                voiceModeEnabled -> Muted
+                                dictation is DictationState.Loading || dictation is DictationState.Listening ->
+                                    MaterialTheme.colorScheme.error
+                                else -> Accent
+                            },
                             modifier = Modifier.size(21.dp),
                         )
                     }
+                }
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .background(Accent, CircleShape)
+                        .clickable(
+                            onClickLabel = if (voiceModeEnabled) "End Voice Mode" else "Start Voice Mode",
+                            onClick = ::toggleVoiceMode,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.GraphicEq,
+                        contentDescription = if (voiceModeEnabled) "End Voice Mode" else "Start Voice Mode",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(23.dp),
+                    )
                 }
                 val running = state is CodexChatState.Running
                 val canSend = ready && (draft.isNotBlank() || pendingAttachments.isNotEmpty())
