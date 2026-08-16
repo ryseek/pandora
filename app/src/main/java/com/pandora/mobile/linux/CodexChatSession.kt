@@ -93,6 +93,10 @@ class CodexChatSession(
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
+    private val _completedAssistantMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val completedAssistantMessages: StateFlow<List<ChatMessage>> =
+        _completedAssistantMessages.asStateFlow()
+
     private val _state = MutableStateFlow<CodexChatState>(CodexChatState.Starting("Preparing Codex…"))
     val state: StateFlow<CodexChatState> = _state.asStateFlow()
 
@@ -523,6 +527,7 @@ class CodexChatSession(
                 itemId = params.optString("itemId"),
                 delta = params.optString("delta"),
             )
+            "item/completed" -> completeAgentMessage(params.optJSONObject("item"))
             "turn/completed" -> {
                 val turn = params.optJSONObject("turn")
                 val status = turn?.optString("status").orEmpty()
@@ -616,6 +621,27 @@ class CodexChatSession(
             )
         }
         _messages.value = current
+    }
+
+    private fun completeAgentMessage(item: JSONObject?) {
+        if (item == null || item.optString("type") != "agentMessage") return
+        val itemId = item.optString("id")
+        val text = item.optString("text").trim()
+        if (itemId.isBlank() || text.isBlank()) return
+        val messageId = assistantMessageIds.getOrPut(itemId) { UUID.randomUUID().toString() }
+        val completed = ChatMessage(
+            id = messageId,
+            role = ChatRole.ASSISTANT,
+            text = text,
+            attachments = extractAgentAttachments(text, installer.workspace),
+        )
+        val current = _messages.value.toMutableList()
+        val index = current.indexOfFirst { it.id == messageId }
+        if (index >= 0) current[index] = completed else current += completed
+        _messages.value = current
+        if (_completedAssistantMessages.value.none { it.id == messageId }) {
+            _completedAssistantMessages.value = _completedAssistantMessages.value + completed
+        }
     }
 
     private fun addSystemMessage(

@@ -3090,6 +3090,7 @@ private fun ChatScreen(
     var previewAttachment by remember { mutableStateOf<ChatAttachment?>(null) }
     val chatScope = rememberCoroutineScope()
     val messages by session.messages.collectAsState()
+    val completedAssistantMessages by session.completedAssistantMessages.collectAsState()
     val state by session.state.collectAsState()
     val interrupting by session.interrupting.collectAsState()
     val models by session.models.collectAsState()
@@ -3098,6 +3099,10 @@ private fun ChatScreen(
     var voiceModeEnabled by rememberSaveable { mutableStateOf(false) }
     var pendingVoiceModePermission by remember { mutableStateOf(false) }
     var pendingVoicePrompt by remember { mutableStateOf<String?>(null) }
+    val queuedVoiceMessages = remember(session.id) { mutableStateListOf<ChatMessage>() }
+    val handledVoiceMessageIds = remember(session.id) {
+        completedAssistantMessages.mapTo(mutableSetOf()) { it.id }
+    }
     var lastAutoSpokenId by remember {
         mutableStateOf(messages.lastOrNull { it.role == ChatRole.ASSISTANT }?.id)
     }
@@ -3225,6 +3230,7 @@ private fun ChatScreen(
         if (voiceModeEnabled) {
             voiceModeEnabled = false
             pendingVoicePrompt = null
+            queuedVoiceMessages.clear()
             speech.cancelDictation()
             speech.stopSpeaking()
             return
@@ -3313,15 +3319,41 @@ private fun ChatScreen(
             else -> speech.startDictation(finishOnEndpoint = true)
         }
     }
-    LaunchedEffect(state, messages.size, voiceModeEnabled, pendingVoicePrompt) {
+    LaunchedEffect(completedAssistantMessages.size, voiceModeEnabled, pendingVoicePrompt) {
+        completedAssistantMessages.forEach { message ->
+            if (handledVoiceMessageIds.add(message.id) && voiceModeEnabled && pendingVoicePrompt == null) {
+                queuedVoiceMessages += message
+            }
+        }
+    }
+    LaunchedEffect(voiceModeEnabled, playback, queuedVoiceMessages.size, pendingVoicePrompt) {
+        if (
+            voiceModeEnabled &&
+            playback is SpeechPlaybackState.Idle &&
+            pendingVoicePrompt == null &&
+            queuedVoiceMessages.isNotEmpty()
+        ) {
+            val next = queuedVoiceMessages.removeAt(0)
+            lastAutoSpokenId = next.id
+            readAloud(next.text)
+        }
+    }
+    LaunchedEffect(
+        state,
+        messages.size,
+        voiceModeEnabled,
+        pendingVoicePrompt,
+        completedAssistantMessages.size,
+    ) {
         val latest = messages.lastOrNull { it.role == ChatRole.ASSISTANT && it.text.isNotBlank() }
         if (state is CodexChatState.Ready && latest != null && latest.id != lastAutoSpokenId) {
-            lastAutoSpokenId = latest.id
-            if (
-                pendingVoicePrompt == null &&
-                (voiceModeEnabled || AppSettings.speakAssistantResponses(context))
-            ) {
-                readAloud(latest.text)
+            if (voiceModeEnabled) {
+                if (pendingVoicePrompt == null && handledVoiceMessageIds.add(latest.id)) {
+                    queuedVoiceMessages += latest
+                }
+            } else {
+                lastAutoSpokenId = latest.id
+                if (AppSettings.speakAssistantResponses(context)) readAloud(latest.text)
             }
         }
     }
@@ -3331,6 +3363,7 @@ private fun ChatScreen(
             if (event == Lifecycle.Event.ON_STOP) {
                 voiceModeEnabled = false
                 pendingVoicePrompt = null
+                queuedVoiceMessages.clear()
                 speech.cancelDictation()
                 speech.stopSpeaking()
             }
