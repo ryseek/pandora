@@ -56,26 +56,46 @@ class SpeechModelsTest {
     }
 
     @Test
-    fun speechChunksGrowAfterACompactLeadingPhrase() {
-        val chunks = lowLatencySpeechChunks(
-            "One two three four five six seven eight nine ten eleven twelve thirteen fourteen " +
-                "fifteen sixteen seventeen eighteen nineteen twenty.",
-            targetLengths = intArrayOf(20, 40, 80),
-        )
+    fun speechChunksDoNotSplitALongSentenceByLength() {
+        val sentence = "One two three four five six seven eight nine ten eleven twelve thirteen fourteen " +
+            "fifteen sixteen seventeen eighteen nineteen twenty."
 
-        assertEquals(
-            listOf(
-                "One two three four",
-                "five six seven eight nine ten eleven",
-                "twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty.",
-            ),
-            chunks,
-        )
+        assertEquals(listOf(sentence), lowLatencySpeechChunks(sentence))
     }
 
     @Test
     fun speechChunksPreserveAllWordsWithoutSplittingLongTokens() {
         val text = "Okay supercalifragilisticexpialidocious now"
-        assertEquals(text, lowLatencySpeechChunks(text, intArrayOf(8)).joinToString(" "))
+        assertEquals(listOf(text), lowLatencySpeechChunks(text))
+    }
+
+    @Test
+    fun speechChunksUseNaturalPausePunctuationAndNewlinesAsBoundaries() {
+        assertEquals(
+            listOf("Ready.", "Tests pass.", "Ship it."),
+            lowLatencySpeechChunks("Ready.\nTests pass.\nShip it."),
+        )
+        assertEquals(
+            listOf(
+                "This complete opening sentence fits naturally.",
+                "The next sentence is also kept whole.",
+            ),
+            lowLatencySpeechChunks(
+                "This complete opening sentence fits naturally. " +
+                    "The next sentence is also kept whole.",
+            ),
+        )
+        assertEquals(
+            listOf("1. First item.", "2. Second item."),
+            lowLatencySpeechChunks("1. First item.\n2. Second item."),
+        )
+        assertEquals(
+            listOf("First clause,", "second clause:", "more detail;", "final thought —", "done."),
+            lowLatencySpeechChunks("First clause, second clause: more detail; final thought — done."),
+        )
+        assertEquals(
+            listOf("- First list item", "A thought -", "with a natural pause."),
+            lowLatencySpeechChunks("- First list item\nA thought - with a natural pause."),
+        )
     }
 }

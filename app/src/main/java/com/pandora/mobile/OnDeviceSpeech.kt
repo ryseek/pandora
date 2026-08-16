@@ -538,7 +538,8 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
             .replace(Regex("```[\\s\\S]*?```"), " Code block omitted. ")
             .replace(Regex("\\[([^]]+)]\\([^)]+\\)")) { match -> match.groupValues[1] }
             .replace(Regex("[*_#>`~]"), "")
-            .replace(Regex("\\s+"), " ")
+            .replace(Regex("[\\t\\r ]+"), " ")
+            .replace(Regex(" *\\n+ *"), "\n")
             .trim()
         if (cleanText.isBlank()) return
         cancelDictation()
@@ -939,29 +940,17 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
     }
 }
 
-internal fun lowLatencySpeechChunks(
-    text: String,
-    targetLengths: IntArray = intArrayOf(44, 80, 128, 220),
-): List<String> {
-    val words = text.trim().split(Regex("\\s+")).filter(String::isNotBlank)
-    if (words.isEmpty()) return emptyList()
-
-    val chunks = mutableListOf<String>()
-    var current = StringBuilder()
-    words.forEach { word ->
-        val target = targetLengths[chunks.size.coerceAtMost(targetLengths.lastIndex)]
-        val proposedLength = current.length + if (current.isEmpty()) word.length else word.length + 1
-        if (current.isNotEmpty() && proposedLength > target) {
-            chunks += current.toString()
-            current = StringBuilder(word)
-        } else {
-            if (current.isNotEmpty()) current.append(' ')
-            current.append(word)
-        }
-    }
-    if (current.isNotEmpty()) chunks += current.toString()
-    return chunks
-}
+internal fun lowLatencySpeechChunks(text: String): List<String> =
+    text
+        .trim()
+        .split(
+            Regex(
+                "(?<=[!?,;:—–])\\s+|(?<=[ \\t]-)[ \\t]+|" +
+                    "(?<!\\d\\.)(?<=\\.)\\s+|\\n+",
+            ),
+        )
+        .map(String::trim)
+        .filter(String::isNotBlank)
 
 private fun elapsedMillis(startedNanos: Long): Long =
     (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1_000_000L
