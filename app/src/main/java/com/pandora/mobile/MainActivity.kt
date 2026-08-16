@@ -3094,6 +3094,9 @@ private fun ChatScreen(
     val models by session.models.collectAsState()
     val selectedModel by session.selectedModel.collectAsState()
     var modelMenuOpen by remember { mutableStateOf(false) }
+    var voiceModeEnabled by rememberSaveable { mutableStateOf(false) }
+    var pendingVoiceModePermission by remember { mutableStateOf(false) }
+    var pendingVoicePrompt by remember { mutableStateOf<String?>(null) }
     var lastAutoSpokenId by remember {
         mutableStateOf(messages.lastOrNull { it.role == ChatRole.ASSISTANT }?.id)
     }
@@ -3180,8 +3183,18 @@ private fun ChatScreen(
     val microphonePermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) speech.startDictation()
-        else speech.microphonePermissionDenied()
+        if (granted) {
+            if (pendingVoiceModePermission) {
+                pendingVoiceModePermission = false
+                voiceModeEnabled = true
+                speech.startDictation(finishOnEndpoint = true)
+            } else {
+                speech.startDictation()
+            }
+        } else {
+            pendingVoiceModePermission = false
+            speech.microphonePermissionDenied()
+        }
     }
     fun beginDictation() {
         val model = SpeechModels.find(AppSettings.speechToTextModel(context))
@@ -3207,7 +3220,37 @@ private fun ChatScreen(
             speech.speak(text)
         }
     }
+    fun toggleVoiceMode() {
+        if (voiceModeEnabled) {
+            voiceModeEnabled = false
+            pendingVoicePrompt = null
+            speech.cancelDictation()
+            speech.stopSpeaking()
+            return
+        }
+        val dictationModel = SpeechModels.find(AppSettings.speechToTextModel(context))
+        if (dictationModel == null || !speechModels.isInstalled(dictationModel)) {
+            missingSpeechKind = SpeechModelKind.SPEECH_TO_TEXT
+            return
+        }
+        val voiceModel = SpeechModels.find(AppSettings.textToSpeechModel(context))
+        if (voiceModel == null || !speechModels.isInstalled(voiceModel)) {
+            missingSpeechKind = SpeechModelKind.TEXT_TO_SPEECH
+            return
+        }
+        speech.cancelDictation()
+        draft = ""
+        dictationPrefix = ""
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            voiceModeEnabled = true
+            speech.startDictation(finishOnEndpoint = true)
+        } else {
+            pendingVoiceModePermission = true
+            microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
     LaunchedEffect(dictation) {
+        if (voiceModeEnabled) return@LaunchedEffect
         val spoken = when (val current = dictation) {
             is DictationState.Listening -> current.text
             is DictationState.Finished -> current.text
@@ -3222,17 +3265,71 @@ private fun ChatScreen(
         }
         if (dictation is DictationState.Finished) speech.clearDictation()
     }
-    LaunchedEffect(state, messages.size) {
+    LaunchedEffect(voiceModeEnabled, dictation, playback, state) {
+        if (!voiceModeEnabled) return@LaunchedEffect
+        when (val current = dictation) {
+            is DictationState.Listening -> {
+                if (
+                    current.text.isNotBlank() &&
+                    (playback is SpeechPlaybackState.Loading || playback is SpeechPlaybackState.Speaking)
+                ) {
+                    speech.stopSpeaking()
+                }
+            }
+            is DictationState.Finished -> {
+                val spoken = current.text.trim()
+                speech.clearDictation()
+                if (spoken.isNotBlank()) {
+                    speech.stopSpeaking()
+                    if (isVoiceStopCommand(spoken)) {
+                        pendingVoicePrompt = null
+                        if (state is CodexChatState.Running) session.interrupt()
+                    } else if (state is CodexChatState.Ready) {
+                        session.send(spoken)
+                    } else {
+                        pendingVoicePrompt = spoken
+                        if (state is CodexChatState.Running) session.interrupt()
+                    }
+                }
+            }
+            else -> Unit
+        }
+    }
+    LaunchedEffect(voiceModeEnabled, state, pendingVoicePrompt) {
+        val pending = pendingVoicePrompt
+        if (voiceModeEnabled && state is CodexChatState.Ready && !pending.isNullOrBlank()) {
+            if (session.send(pending)) pendingVoicePrompt = null
+        }
+    }
+    LaunchedEffect(voiceModeEnabled, state, playback, dictation) {
+        if (!voiceModeEnabled || dictation !is DictationState.Idle) return@LaunchedEffect
+        when (playback) {
+            SpeechPlaybackState.Loading -> Unit
+            SpeechPlaybackState.Speaking -> speech.startDictation(
+                finishOnEndpoint = true,
+                stopPlaybackFirst = false,
+            )
+            else -> speech.startDictation(finishOnEndpoint = true)
+        }
+    }
+    LaunchedEffect(state, messages.size, voiceModeEnabled, pendingVoicePrompt) {
         val latest = messages.lastOrNull { it.role == ChatRole.ASSISTANT && it.text.isNotBlank() }
         if (state is CodexChatState.Ready && latest != null && latest.id != lastAutoSpokenId) {
             lastAutoSpokenId = latest.id
-            if (AppSettings.speakAssistantResponses(context)) readAloud(latest.text)
+            if (
+                pendingVoicePrompt == null &&
+                (voiceModeEnabled || AppSettings.speakAssistantResponses(context))
+            ) {
+                readAloud(latest.text)
+            }
         }
     }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(session, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
+                voiceModeEnabled = false
+                pendingVoicePrompt = null
                 speech.cancelDictation()
                 speech.stopSpeaking()
             }
@@ -3316,6 +3413,24 @@ private fun ChatScreen(
                     }
                 }
             }
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .background(if (voiceModeEnabled) Accent else SoftSurface, CircleShape)
+                    .clickable(
+                        onClickLabel = if (voiceModeEnabled) "End Voice Mode" else "Start Voice Mode",
+                        onClick = ::toggleVoiceMode,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (voiceModeEnabled) Icons.AutoMirrored.Rounded.VolumeUp else Icons.Rounded.MicNone,
+                    contentDescription = if (voiceModeEnabled) "End Voice Mode" else "Start Voice Mode",
+                    tint = if (voiceModeEnabled) MaterialTheme.colorScheme.onPrimary else Accent,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
             StatusPill()
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
@@ -3369,7 +3484,28 @@ private fun ChatScreen(
                     .padding(horizontal = 18.dp, vertical = 2.dp),
             )
         }
-        when (val current = dictation) {
+        if (voiceModeEnabled) {
+            VoiceModePanel(
+                label = when {
+                    playback is SpeechPlaybackState.Loading -> "Preparing Codex’s voice…"
+                    playback is SpeechPlaybackState.Speaking -> "Codex is speaking · talk to interrupt"
+                    dictation is DictationState.Loading -> "Getting the microphone ready…"
+                    dictation is DictationState.Transcribing -> "Finishing what you said…"
+                    (dictation as? DictationState.Listening)?.text?.isNotBlank() == true ->
+                        (dictation as DictationState.Listening).text
+                    state is CodexChatState.Running -> "Codex is working · you can interrupt"
+                    else -> "Listening · speak your request"
+                },
+                speaking = playback is SpeechPlaybackState.Loading || playback is SpeechPlaybackState.Speaking,
+                onInterrupt = {
+                    speech.cancelDictation()
+                    speech.stopSpeaking()
+                    pendingVoicePrompt = null
+                    if (state is CodexChatState.Running) session.interrupt()
+                },
+                onEnd = ::toggleVoiceMode,
+            )
+        } else when (val current = dictation) {
             DictationState.Loading -> VoiceStatus("Loading dictation model…", active = true)
             DictationState.Transcribing -> VoiceStatus("Whisper is refining the transcript…", active = true)
             is DictationState.Listening -> VoiceStatus(
@@ -3632,6 +3768,51 @@ private fun SlashCommandPalette(
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
             }
         }
+    }
+}
+
+@Composable
+private fun VoiceModePanel(
+    label: String,
+    speaking: Boolean,
+    onInterrupt: () -> Unit,
+    onEnd: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .background(AccentSurface, RoundedCornerShape(16.dp))
+            .semantics {
+                liveRegion = LiveRegionMode.Polite
+                stateDescription = label
+            }
+            .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(Accent, CircleShape)
+                .clickable(
+                    onClickLabel = if (speaking) "Interrupt speech" else "Stop current action",
+                    onClick = onInterrupt,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (speaking) Icons.Rounded.Stop else Icons.Rounded.MicNone,
+                contentDescription = if (speaking) "Interrupt speech" else "Listening",
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Voice Mode", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(label, color = Muted, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2)
+        }
+        TextButton(onClick = onEnd) { Text("End") }
     }
 }
 

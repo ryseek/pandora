@@ -190,13 +190,16 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
     }
 
     @SuppressLint("MissingPermission")
-    fun startDictation() {
+    fun startDictation(
+        finishOnEndpoint: Boolean = false,
+        stopPlaybackFirst: Boolean = true,
+    ) {
         if (
             _dictation.value is DictationState.Loading ||
             _dictation.value is DictationState.Listening ||
             _dictation.value is DictationState.Transcribing
         ) return
-        stopSpeaking()
+        if (stopPlaybackFirst) stopSpeaking()
         val model = selectedModel(SpeechModelKind.SPEECH_TO_TEXT)
         if (model == null || !models.isInstalled(model)) {
             _dictation.value = DictationState.Failed("Download the selected dictation model in Settings first.")
@@ -262,18 +265,12 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                     throw error
                 }
                 if (operation != dictationGeneration.get()) return@launch
-                val minBytes = AudioRecord.getMinBufferSize(
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                )
-                check(minBytes > 0) { "This device could not open a 16 kHz microphone stream" }
-                val audioRecord = AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    maxOf(minBytes * 4, AUDIO_CHUNK_SAMPLES * 8),
+                val audioRecord = createAudioRecord(
+                    if (stopPlaybackFirst) {
+                        MediaRecorder.AudioSource.VOICE_RECOGNITION
+                    } else {
+                        MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                    },
                 )
                 localRecorder = audioRecord
                 check(audioRecord.state == AudioRecord.STATE_INITIALIZED) { "The microphone could not be initialized" }
@@ -353,6 +350,10 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
                     if (recognizer.isEndpoint(stream)) {
                         committed = joinText(committed, partial)
                         recognizer.reset(stream)
+                        if (finishOnEndpoint && committed.isNotBlank()) {
+                            activeDictation.compareAndSet(operation, 0)
+                            runCatching { audioRecord.stop() }
+                        }
                     }
                 }
                 captureFailure.get()?.let { throw it }
@@ -661,7 +662,9 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
         return SpeechModels.find(id)?.takeIf { it.kind == kind }
     }
 
-    private fun createAudioRecord(): AudioRecord {
+    private fun createAudioRecord(
+        audioSource: Int = MediaRecorder.AudioSource.VOICE_RECOGNITION,
+    ): AudioRecord {
         check(
             ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED,
@@ -673,7 +676,7 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
         )
         check(minBytes > 0) { "This device could not open a 16 kHz microphone stream" }
         return AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            audioSource,
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
