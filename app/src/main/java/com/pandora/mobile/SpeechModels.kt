@@ -87,18 +87,18 @@ object SpeechModels {
             engine = "vits-piper-en_US-lessac-low-int8",
         ),
         SpeechModel(
-            id = "piper-thorsten-de-int8",
+            id = "piper-amy-en-medium",
             kind = SpeechModelKind.TEXT_TO_SPEECH,
-            name = "Thorsten · Compact",
-            language = "German",
-            description = "Compact German voice optimized with int8 weights.",
-            tier = SpeechModelTier.COMPACT,
-            downloadBytes = 21_292_232,
+            name = "Amy · Medium",
+            language = "English (US)",
+            description = "Higher-quality Amy voice with more natural speech.",
+            tier = SpeechModelTier.BALANCED,
+            downloadBytes = 67_223_746,
             downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/" +
-                "vits-piper-de_DE-thorsten-low-int8.tar.bz2",
-            archiveRoot = "vits-piper-de_DE-thorsten-low-int8",
-            requiredFiles = listOf("de_DE-thorsten-low.onnx", "tokens.txt", "espeak-ng-data/phontab"),
-            engine = "vits-piper-de_DE-thorsten-low-int8",
+                "vits-piper-en_US-amy-medium.tar.bz2",
+            archiveRoot = "vits-piper-en_US-amy-medium",
+            requiredFiles = listOf("en_US-amy-medium.onnx", "tokens.txt", "espeak-ng-data/phontab"),
+            engine = "vits-piper-en_US-amy-medium",
         ),
     )
 

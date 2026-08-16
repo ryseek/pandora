@@ -45,6 +45,17 @@ class SpeechModelsTest {
     }
 
     @Test
+    fun voiceCatalogOffersCompactAndMediumAmyModels() {
+        val amyModels = SpeechModels.all.filter {
+            it.kind == SpeechModelKind.TEXT_TO_SPEECH && it.name.startsWith("Amy ·")
+        }
+
+        assertEquals(setOf(SpeechModelTier.COMPACT, SpeechModelTier.BALANCED), amyModels.map { it.tier }.toSet())
+        assertTrue(amyModels.any { it.id == "piper-amy-en-medium" && "amy-medium" in it.engine })
+        assertTrue(SpeechModels.all.none { "thorsten" in it.id || "thorsten" in it.engine })
+    }
+
+    @Test
     fun speechChunksGrowAfterACompactLeadingPhrase() {
         val chunks = lowLatencySpeechChunks(
             "One two three four five six seven eight nine ten eleven twelve thirteen fourteen " +

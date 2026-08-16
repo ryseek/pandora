@@ -76,6 +76,13 @@ internal fun dictationRealTimeFactor(
 internal fun audioSamplesToMillis(samples: Long, sampleRate: Int): Long =
     if (samples <= 0 || sampleRate <= 0) 0 else samples * 1_000L / sampleRate
 
+internal fun ttsAudioBufferSizeBytes(minimumBytes: Int, sampleRate: Int): Int {
+    require(sampleRate > 0) { "Invalid TTS sample rate: $sampleRate" }
+    val bytesPerFrame = Float.SIZE_BYTES
+    val requestedBytes = maxOf(minimumBytes, sampleRate / 2, bytesPerFrame)
+    return ((requestedBytes + bytesPerFrame - 1) / bytesPerFrame) * bytesPerFrame
+}
+
 internal fun enqueueAudioChunk(
     queue: ArrayBlockingQueue<ShortArray>,
     chunk: ShortArray,
@@ -902,7 +909,7 @@ class OnDeviceSpeech(context: Context, private val models: SpeechModelManager) {
         return AudioTrack(
             attributes,
             format,
-            minimum.coerceAtLeast(sampleRate / 2),
+            ttsAudioBufferSizeBytes(minimum, sampleRate),
             AudioTrack.MODE_STREAM,
             AudioManager.AUDIO_SESSION_ID_GENERATE,
         )
