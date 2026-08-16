@@ -3635,26 +3635,20 @@ private fun ChatScreen(
                         )
                     }
                 }
-                Box(
-                    Modifier
-                        .size(48.dp)
-                        .background(Accent, CircleShape)
-                        .clickable(
-                            onClickLabel = if (voiceModeEnabled) "End Voice Mode" else "Start Voice Mode",
-                            onClick = ::toggleVoiceMode,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Rounded.GraphicEq,
-                        contentDescription = if (voiceModeEnabled) "End Voice Mode" else "Start Voice Mode",
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(23.dp),
-                    )
-                }
                 val running = state is CodexChatState.Running
-                val canSend = ready && (draft.isNotBlank() || pendingAttachments.isNotEmpty())
-                val actionEnabled = if (running) !interrupting else canSend
+                val hasComposerContent = draft.isNotBlank() || pendingAttachments.isNotEmpty()
+                val canSend = ready && hasComposerContent
+                val actionEnabled = when {
+                    running -> !interrupting
+                    hasComposerContent -> canSend
+                    else -> true
+                }
+                val actionLabel = when {
+                    running -> "Stop Codex"
+                    hasComposerContent -> "Send message"
+                    voiceModeEnabled -> "End Voice Mode"
+                    else -> "Start Voice Mode"
+                }
                 Box(
                     Modifier
                         .size(48.dp)
@@ -3662,32 +3656,44 @@ private fun ChatScreen(
                             when {
                                 running && interrupting -> MaterialTheme.colorScheme.errorContainer
                                 running -> MaterialTheme.colorScheme.error
-                                canSend -> Accent
-                                else -> Line
+                                hasComposerContent && !canSend -> Line
+                                else -> Accent
                             },
                             CircleShape,
                         )
                         .clickable(
                             enabled = actionEnabled,
-                            onClickLabel = if (running) "Stop Codex" else "Send message",
-                            onClick = { if (running) session.interrupt() else submit() },
+                            onClickLabel = actionLabel,
+                            onClick = {
+                                when {
+                                    running -> session.interrupt()
+                                    hasComposerContent -> submit()
+                                    else -> toggleVoiceMode()
+                                }
+                            },
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        if (running) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.Send,
+                        when {
+                            running -> Icons.Rounded.Stop
+                            hasComposerContent -> Icons.AutoMirrored.Rounded.Send
+                            else -> Icons.Rounded.GraphicEq
+                        },
                         contentDescription = when {
                             running && interrupting -> "Stopping Codex"
                             running -> "Stop Codex"
-                            else -> "Send message"
+                            hasComposerContent -> "Send message"
+                            voiceModeEnabled -> "End Voice Mode"
+                            else -> "Start Voice Mode"
                         },
                         tint = when {
                             running && interrupting -> MaterialTheme.colorScheme.onErrorContainer
                             running -> MaterialTheme.colorScheme.onError
-                            canSend -> MaterialTheme.colorScheme.onPrimary
-                            else -> Muted
+                            hasComposerContent && !canSend -> Muted
+                            else -> MaterialTheme.colorScheme.onPrimary
                         },
-                        modifier = Modifier.size(19.dp),
+                        modifier = Modifier.size(if (running || hasComposerContent) 19.dp else 23.dp),
                     )
                 }
             }
